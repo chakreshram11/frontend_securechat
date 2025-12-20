@@ -39,10 +39,19 @@ useEffect(() => {
     setUsers((prev) => prev.filter((u) => u._id !== deletedUser._id));
   });
 
-  // ✅ Listen for group updates (optional)
+  // ✅ Listen for group updates
   socket.on("groupAdded", () => loadGroups());
+  socket.on("groupUpdated", () => loadGroups());
+  socket.on("groupDeleted", () => loadGroups());
 
-  return () => socket.disconnect();
+  return () => {
+    socket.off("user:new");
+    socket.off("user:deleted");
+    socket.off("groupAdded");
+    socket.off("groupUpdated");
+    socket.off("groupDeleted");
+    socket.disconnect();
+  };
 }, []);
 
 
@@ -141,15 +150,23 @@ async function deleteUser(id) {
   async function saveGroupEdits() {
     if (!editingGroup) return;
     try {
+      // Ensure members are properly formatted as an array of IDs (strings)
+      const membersToSend = Array.isArray(editingGroup.members) 
+        ? editingGroup.members.map(m => 
+            typeof m === 'object' && m._id ? String(m._id) : String(m)
+          )
+        : [];
+      
       await api.put(`/api/admin/groups/${editingGroup._id}`, {
         name: editingGroup.name,
-        members: editingGroup.members,
+        members: membersToSend,
       });
       toast.success("✅ Group updated");
       setEditingGroup(null);
       loadGroups();
-    } catch {
-      toast.error("❌ Failed to update group");
+    } catch (err) {
+      console.error("Failed to update group:", err);
+      toast.error(err.response?.data?.error || "❌ Failed to update group");
     }
   }
 
@@ -274,32 +291,99 @@ async function deleteUser(id) {
                 {editingGroup && editingGroup._id === g._id ? (
                   <>
                     <input
-                      className="border p-2 rounded w-full"
+                      className="border p-2 rounded w-full mb-3"
                       value={editingGroup.name}
                       onChange={(e) =>
                         setEditingGroup({ ...editingGroup, name: e.target.value })
                       }
+                      placeholder="Group Name"
                     />
-                    <select
-                      multiple
-                      className="border p-2 rounded w-full h-24 sm:h-32"
-                      value={editingGroup.members.map((m) => m.toString())}
-                      onChange={(e) =>
-                        setEditingGroup({
-                          ...editingGroup,
-                          members: Array.from(
-                            e.target.selectedOptions,
-                            (opt) => opt.value
-                          ),
-                        })
-                      }
-                    >
-                      {users.map((u) => (
-                        <option key={u._id} value={u._id}>
-                          {u.displayName || u.username} ({u.role})
-                        </option>
-                      ))}
-                    </select>
+                    
+                    {/* Current Members */}
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold mb-2">Current Members:</h4>
+                      <div className="space-y-2 max-h-32 overflow-y-auto border rounded p-2 bg-gray-50">
+                        {editingGroup.members.length === 0 ? (
+                          <div className="text-xs text-gray-500 text-center py-2">
+                            No members yet
+                          </div>
+                        ) : (
+                          editingGroup.members.map((memberId) => {
+                            const member = users.find(u => String(u._id) === String(memberId));
+                            if (!member) return null;
+                            return (
+                              <div
+                                key={memberId}
+                                className="flex items-center justify-between p-2 bg-white rounded border"
+                              >
+                                <span className="text-sm">
+                                  {member.displayName || member.username} ({member.role})
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    setEditingGroup({
+                                      ...editingGroup,
+                                      members: editingGroup.members.filter(
+                                        (id) => String(id) !== String(memberId)
+                                      ),
+                                    });
+                                  }}
+                                  className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Add Members */}
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold mb-2">Add Members:</h4>
+                      <div className="space-y-2 max-h-32 overflow-y-auto border rounded p-2 bg-gray-50">
+                        {users
+                          .filter(
+                            (u) =>
+                              !editingGroup.members.some(
+                                (m) => String(m) === String(u._id)
+                              )
+                          )
+                          .map((u) => (
+                            <div
+                              key={u._id}
+                              className="flex items-center justify-between p-2 bg-white rounded border"
+                            >
+                              <span className="text-sm">
+                                {u.displayName || u.username} ({u.role})
+                              </span>
+                              <button
+                                onClick={() => {
+                                  setEditingGroup({
+                                    ...editingGroup,
+                                    members: [...editingGroup.members, String(u._id)],
+                                  });
+                                }}
+                                className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600"
+                              >
+                                Add
+                              </button>
+                            </div>
+                          ))}
+                        {users.filter(
+                          (u) =>
+                            !editingGroup.members.some(
+                              (m) => String(m) === String(u._id)
+                            )
+                        ).length === 0 && (
+                          <div className="text-xs text-gray-500 text-center py-2">
+                            All users are already members
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="flex gap-2 mt-2">
                       <button
                         onClick={saveGroupEdits}
@@ -325,13 +409,21 @@ async function deleteUser(id) {
                     </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() =>
+                        onClick={() => {
+                          // Extract member IDs properly
+                          const memberIds = g.members.map((m) => {
+                            if (typeof m === 'object' && m._id) {
+                              return String(m._id);
+                            }
+                            return String(m);
+                          });
+                          
                           setEditingGroup({
                             _id: g._id,
                             name: g.name,
-                            members: g.members.map((m) => m._id || m),
-                          })
-                        }
+                            members: memberIds,
+                          });
+                        }}
                         className="px-3 py-1 text-xs sm:text-sm bg-yellow-500 text-white rounded hover:bg-yellow-600"
                       >
                         Edit

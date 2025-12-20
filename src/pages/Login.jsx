@@ -26,28 +26,11 @@ async function loadPrivateKey() {
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState("login");
 
-  async function registerOrLogin(e) {
+  async function handleLogin(e) {
     e.preventDefault();
 
-    if (mode === "register") {
-      // For registration, generate keys locally
-      const { privB64, pubB64 } = await cryptoLib.generateECDHKeyPair();
-      
-      const payload = { username, password, ecdhPublicKey: pubB64 };
-      
-      try {
-        const { data } = await api.post("/api/auth/register", payload);
-        setToken(data.token);
-        onLogin(data.token);
-      } catch (err) {
-        alert(err.response?.data?.error || "Registration failed");
-      }
-      return;
-    }
-
-    // For login
+    // Login only
     let privateKey = await loadPrivateKey();
     const needPrivateKey = !privateKey;
     
@@ -190,10 +173,10 @@ export default function Login({ onLogin }) {
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       <form
         className="bg-white p-6 rounded shadow w-96"
-        onSubmit={registerOrLogin}
+        onSubmit={handleLogin}
       >
         <h2 className="text-xl mb-4 font-semibold text-center">
-          {mode === "login" ? "Login" : "Register"}
+          Login
         </h2>
 
         <input
@@ -201,6 +184,7 @@ export default function Login({ onLogin }) {
           placeholder="Username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
+          required
         />
 
         <input
@@ -209,23 +193,19 @@ export default function Login({ onLogin }) {
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          required
         />
 
-        <div className="flex gap-2">
-          <button
-            className="bg-blue-600 text-white px-4 py-2 rounded flex-1"
-            type="submit"
-          >
-            {mode === "login" ? "Login" : "Register"}
-          </button>
-          <button
-            type="button"
-            className="px-4 py-2 border rounded flex-1"
-            onClick={() => setMode(mode === "login" ? "register" : "login")}
-          >
-            Switch
-          </button>
-        </div>
+        <button
+          className="bg-blue-600 text-white px-4 py-2 rounded w-full hover:bg-blue-700"
+          type="submit"
+        >
+          Login
+        </button>
+        
+        <p className="text-xs text-gray-500 text-center mt-4">
+          Contact your administrator to create an account
+        </p>
       </form>
     </div>
   );

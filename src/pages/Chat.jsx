@@ -3,14 +3,17 @@ import React, { useEffect, useState, useRef } from "react";
 import api, { setToken } from "../services/api";
 import io from "socket.io-client";
 import ChatWindow from "../components/ChatWindow";
+import GroupChatWindow from "../components/GroupChatWindow";
 import AdminPanel from "../pages/AdminPanel";
 import { Menu } from "lucide-react";
 import { toast } from "react-toastify";
 
 export default function Chat({ token, onLogout }) {
   const [users, setUsers] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [currentUser, setCurrentUser] = useState(null); // ✅ logged-in user
   const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -35,8 +38,13 @@ export default function Chat({ token, onLogout }) {
       const { data: allUsers } = await api.get("/api/users");
       if (!mounted) return;
       setUsers(allUsers);
+
+      // Load groups the user is a member of
+      const { data: userGroups } = await api.get("/api/users/groups/mine");
+      if (!mounted) return;
+      setGroups(userGroups);
     } catch (err) {
-      console.error("Failed to load users", err);
+      console.error("Failed to load users/groups", err);
     }
   }
   init();
@@ -97,14 +105,57 @@ export default function Chat({ token, onLogout }) {
     }
   };
 
-  // reconnect handler: re-fetch users to avoid missing state
+  const onGroupAdded = async () => {
+    console.log("👥 Group added, refreshing groups...");
+    try {
+      const { data: userGroups } = await api.get("/api/users/groups/mine");
+      if (mounted) {
+        setGroups(userGroups);
+      }
+    } catch (err) {
+      console.error("Failed to refresh groups", err);
+    }
+  };
+
+  const onGroupUpdated = async () => {
+    console.log("👥 Group updated, refreshing groups...");
+    try {
+      const { data: userGroups } = await api.get("/api/users/groups/mine");
+      if (mounted) {
+        setGroups(userGroups);
+        // If the updated group is currently selected, refresh it
+        if (selectedGroup) {
+          const updatedGroup = userGroups.find(g => g._id === selectedGroup._id);
+          if (updatedGroup) {
+            setSelectedGroup(updatedGroup);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to refresh groups", err);
+    }
+  };
+
+  const onGroupDeleted = (deleted) => {
+    console.log("🗑️ Group deleted:", deleted);
+    setGroups((prev) => prev.filter((g) => g._id !== deleted.id));
+    // If the deleted group was selected, clear selection
+    if (selectedGroup && selectedGroup._id === deleted.id) {
+      setSelectedGroup(null);
+      setSelectedUser(null);
+    }
+  };
+
+  // reconnect handler: re-fetch users and groups to avoid missing state
   const onReconnect = async () => {
-    console.log("🔄 Socket reconnected, refreshing user list...");
+    console.log("🔄 Socket reconnected, refreshing user list and groups...");
     try {
       const { data: allUsers } = await api.get("/api/users");
       setUsers(allUsers);
+      const { data: userGroups } = await api.get("/api/users/groups/mine");
+      setGroups(userGroups);
     } catch (err) {
-      console.error("Failed to refresh users after reconnect", err);
+      console.error("Failed to refresh users/groups after reconnect", err);
     }
   };
 
@@ -121,6 +172,9 @@ export default function Chat({ token, onLogout }) {
 
   socket.on("onlineUsers", onOnlineUsers);
   socket.on("message", onMessage);
+  socket.on("groupAdded", onGroupAdded);
+  socket.on("groupUpdated", onGroupUpdated);
+  socket.on("groupDeleted", onGroupDeleted);
 
   socket.io.on("reconnect", onReconnect);
 
@@ -142,6 +196,9 @@ export default function Chat({ token, onLogout }) {
     socket.off("userDeleted", onUserDeleted);
     socket.off("onlineUsers", onOnlineUsers);
     socket.off("message", onMessage);
+    socket.off("groupAdded", onGroupAdded);
+    socket.off("groupUpdated", onGroupUpdated);
+    socket.off("groupDeleted", onGroupDeleted);
     socket.io.off("reconnect", onReconnect);
     socket.disconnect();
     // ensure ref cleared
@@ -175,7 +232,7 @@ export default function Chat({ token, onLogout }) {
         }`}
       >
         <h3 className="font-bold mb-3">Users</h3>
-        <div className="space-y-2 flex-1 overflow-y-auto">
+        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
           {users.map((u) => {
   const isOnline = onlineUsers.includes(u._id);
   const isMe = currentUser?._id === u._id;
@@ -193,6 +250,7 @@ export default function Chat({ token, onLogout }) {
       onClick={() => {
         if (!isMe) {
           setSelectedUser(u);
+          setSelectedGroup(null);
           setShowAdminPanel(false);
           setSidebarOpen(false);
         }
@@ -225,6 +283,36 @@ export default function Chat({ token, onLogout }) {
 
         </div>
 
+        {/* Groups Section */}
+        <h3 className="font-bold mb-3 mt-4">Groups</h3>
+        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
+          {groups.length === 0 ? (
+            <div className="text-sm text-gray-500 p-2">No groups yet</div>
+          ) : (
+            groups.map((g) => (
+              <div
+                key={g._id}
+                className={`p-2 border rounded cursor-pointer transition-all ${
+                  selectedGroup?._id === g._id
+                    ? "bg-blue-100 border-blue-300"
+                    : "hover:bg-gray-50"
+                }`}
+                onClick={() => {
+                  setSelectedGroup(g);
+                  setSelectedUser(null);
+                  setShowAdminPanel(false);
+                  setSidebarOpen(false);
+                }}
+              >
+                <div className="font-semibold">👥 {g.name}</div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {g.members?.length || 0} members
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
         {/* ✅ Admin-only panel access */}
         {currentUser?.role === "admin" && (
           <div className="mt-4">
@@ -233,6 +321,7 @@ export default function Chat({ token, onLogout }) {
               onClick={() => {
                 setShowAdminPanel(true);
                 setSelectedUser(null);
+                setSelectedGroup(null);
                 setSidebarOpen(false);
               }}
             >
@@ -284,6 +373,12 @@ export default function Chat({ token, onLogout }) {
 
         {showAdminPanel ? (
           <AdminPanel />
+        ) : selectedGroup ? (
+          <GroupChatWindow
+            group={selectedGroup}
+            socket={socketRef.current}
+            myUserId={currentUser?._id}
+          />
         ) : selectedUser ? (
           <ChatWindow
             other={selectedUser}
@@ -291,7 +386,7 @@ export default function Chat({ token, onLogout }) {
             myUserId={currentUser?._id}
           />
         ) : (
-          <div className="text-gray-500">Select a user to chat</div>
+          <div className="text-gray-500">Select a user or group to chat</div>
         )}
       </main>
     </div>

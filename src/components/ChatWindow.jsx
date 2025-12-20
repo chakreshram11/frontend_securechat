@@ -202,85 +202,124 @@ export default function ChatWindow({ other, socket, myUserId }) {
               };
             }
             
-            // For messages I sent, use the current AES key (I encrypted with recipient's current key)
-            // For messages from others, try sender's public key from meta first (they encrypted with their key)
-            let decryptionKey = importedKey;
-            let decryptionAttempted = false;
+            const isMe = String(m.senderId) === String(myUserId);
+            let plaintext = null;
             
-            // If message is from another user and we have their public key in meta, use it
-            if (String(m.senderId) !== String(myUserId) && m.meta?.senderPublicKey) {
+            // Strategy 1: Try cached AES key for this sender/receiver
+            if (m.senderId) {
+              const cachedKeyB64 = cryptoLib.loadAesKeyForUser(m.senderId);
+              if (cachedKeyB64) {
+                try {
+                  const cachedKey = await cryptoLib.importAesKeyFromRawBase64(cachedKeyB64);
+                  plaintext = await cryptoLib.decryptWithAesKey(cachedKey, m.ciphertext);
+                  console.log("✅ Decrypted using cached key");
+                  return { ...m, plaintext, isMe };
+                } catch (cachedErr) {
+                  console.warn("⚠️ Cached key failed, trying other methods");
+                }
+              }
+            }
+            
+            // Strategy 2: For messages from others, try sender's public key from meta (CORRECT approach)
+            // The sender encrypted with: senderPrivateKey + myPublicKey
+            // I decrypt with: myPrivateKey + senderPublicKey (from meta) = same shared secret
+            if (!isMe && m.meta?.senderPublicKey) {
               try {
-                console.log("🔑 Using sender's public key from message meta for decryption");
-                const { aesKey: senderKey } = await cryptoLib.deriveSharedAESKey(
+                console.log("🔑 Trying sender's public key from meta for message from:", m.senderId);
+                console.log("   Sender public key (first 50):", m.meta.senderPublicKey.substring(0, 50));
+                
+                // Verify the public key format
+                if (m.meta.senderPublicKey.length < 100) {
+                  console.error("⚠️ Sender public key seems too short:", m.meta.senderPublicKey.length);
+                }
+                
+                const { aesKey: senderKey, rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
                   myPriv,
                   m.meta.senderPublicKey
                 );
-                decryptionKey = senderKey;
-                decryptionAttempted = true;
-              } catch (keyErr) {
-                console.warn("⚠️ Failed to derive key from sender's public key in meta:", keyErr);
+                console.log("   ✅ Key derived, attempting decryption...");
+                
+                plaintext = await cryptoLib.decryptWithAesKey(senderKey, m.ciphertext);
+                console.log("   ✅ Decrypted successfully:", plaintext.substring(0, 50));
+                
+                cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
+                console.log("✅ Decrypted using sender's key from meta");
+                return { ...m, plaintext, isMe };
+              } catch (metaErr) {
+                console.error("❌ Sender's key from meta failed:", metaErr.message);
+                console.error("   Error name:", metaErr.name);
+                console.error("   Error details:", {
+                  hasPrivateKey: !!myPriv,
+                  hasSenderPublicKey: !!m.meta.senderPublicKey,
+                  senderPublicKeyLength: m.meta.senderPublicKey?.length,
+                  ciphertextLength: m.ciphertext?.length,
+                  senderPublicKeyValid: m.meta.senderPublicKey && m.meta.senderPublicKey.length > 100
+                });
+                if (metaErr.stack) {
+                  console.error("   Stack:", metaErr.stack);
+                }
               }
             }
             
-            // Try decrypting
-            try {
-              const plaintext = await cryptoLib.decryptWithAesKey(decryptionKey, m.ciphertext);
-              // If we used sender's key and it worked, cache it
-              if (decryptionAttempted && m.meta?.senderPublicKey) {
-                const { rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
-                  myPriv,
-                  m.meta.senderPublicKey
-                );
-                cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-              }
-              return { ...m, plaintext, isMe: m.senderId === myUserId };
-            } catch (decryptErr) {
-              console.warn("⚠️ Decryption failed:", {
-                messageId: m.id,
-                senderId: m.senderId,
-                isMe: m.senderId === myUserId,
-                usedSenderKey: decryptionAttempted,
-                error: decryptErr.message
-              });
-              
-              // If we haven't tried sender's key yet, try it now
-              if (!decryptionAttempted && m.meta?.senderPublicKey) {
-                try {
-                  console.log("🔄 Retrying with sender's public key from message meta");
-                  const { aesKey: retryKey, rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
-                    myPriv,
-                    m.meta.senderPublicKey
-                  );
-                  const plaintext = await cryptoLib.decryptWithAesKey(retryKey, m.ciphertext);
-                  cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-                  return { ...m, plaintext, isMe: m.senderId === myUserId };
-                } catch (retryErr) {
-                  console.error("❌ Retry with sender's key failed:", retryErr);
-                }
-              }
-              
-              // Last resort: fetch sender's current public key from server
-              if (m.senderId && String(m.senderId) !== String(myUserId)) {
-                try {
-                  console.log("🔄 Fetching sender's current public key from server");
-                  const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
-                  if (senderUser.ecdhPublicKey) {
-                    const { aesKey: serverKey, rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
-                      myPriv,
-                      senderUser.ecdhPublicKey
-                    );
-                    const plaintext = await cryptoLib.decryptWithAesKey(serverKey, m.ciphertext);
-                    cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-                    return { ...m, plaintext, isMe: m.senderId === myUserId };
+            // Strategy 3: For messages I sent, try current recipient's key
+            // I encrypted with: myPrivateKey + recipientPublicKey (at time of sending)
+            // To decrypt, I need: myPrivateKey + recipientPublicKey (same key)
+            // Note: This only works if recipient's key hasn't changed
+            if (isMe) {
+              try {
+                plaintext = await cryptoLib.decryptWithAesKey(importedKey, m.ciphertext);
+                console.log("✅ Decrypted my message using current recipient key");
+                return { ...m, plaintext, isMe };
+              } catch (myMsgErr) {
+                console.warn("⚠️ Current recipient key failed for my message:", myMsgErr.message);
+                // Try to use cached key if available
+                const cachedKeyB64 = cryptoLib.loadAesKeyForUser(other._id);
+                if (cachedKeyB64) {
+                  try {
+                    const cachedKey = await cryptoLib.importAesKeyFromRawBase64(cachedKeyB64);
+                    plaintext = await cryptoLib.decryptWithAesKey(cachedKey, m.ciphertext);
+                    console.log("✅ Decrypted my message using cached recipient key");
+                    return { ...m, plaintext, isMe };
+                  } catch (cachedErr) {
+                    console.warn("⚠️ Cached recipient key also failed");
                   }
-                } catch (fetchErr) {
-                  console.error("❌ Failed to fetch/use sender's key:", fetchErr);
                 }
               }
-              
-              console.error("❌ All decryption attempts failed for message:", m.id);
-              return { ...m, plaintext: "[Decryption Error]", isMe: m.senderId === myUserId };
             }
+            
+            // Strategy 4: For messages from others, try fetching their current public key
+            if (!isMe && m.senderId) {
+              try {
+                const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
+                if (senderUser?.ecdhPublicKey) {
+                  const { aesKey: serverKey, rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
+                    myPriv,
+                    senderUser.ecdhPublicKey
+                  );
+                  plaintext = await cryptoLib.decryptWithAesKey(serverKey, m.ciphertext);
+                  cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
+                  console.log("✅ Decrypted using sender's current key from server");
+                  return { ...m, plaintext, isMe };
+                }
+              } catch (fetchErr) {
+                console.warn("⚠️ Failed to fetch/use sender's current key");
+              }
+            }
+            
+            // Strategy 5: For messages I sent, try recipient's current key (already tried, but log it)
+            if (isMe) {
+              console.warn("⚠️ Could not decrypt my own message - recipient's key may have changed");
+            }
+            
+            // All strategies failed
+            console.error("❌ All decryption attempts failed for message:", {
+              id: m._id || m.id,
+              senderId: m.senderId,
+              isMe,
+              hasMeta: !!m.meta,
+              hasSenderPublicKey: !!m.meta?.senderPublicKey
+            });
+            return { ...m, plaintext: "[Decryption Error]", isMe };
           })
         );
         setHistory(decrypted);
@@ -294,72 +333,187 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
   /* ---------- Incoming messages ---------- */
   useEffect(() => {
-    if (!socket || !aesKey) return;
+    if (!socket) return;
 
     const handler = async (m) => {
       try {
         if (!m.senderId || !m.ciphertext) return;
-        let text;
-        try {
-          text = await cryptoLib.decryptWithAesKey(aesKey, m.ciphertext);
-        } catch (err) {
-          console.warn("⚠️ Failed to decrypt incoming message with current AES key");
-          console.warn("   Error:", err.message);
-          console.warn("   Sender ID:", m.senderId);
-          console.warn("   Has senderPublicKey in meta:", !!m.meta?.senderPublicKey);
-          
-          // Try using sender's public key from message meta
-          if (m.meta?.senderPublicKey) {
-            try {
-              console.log("🔄 Retrying with sender's public key from message meta");
-              const myPriv = await loadLocalPrivateKey();
-              if (!myPriv) {
-                console.error("❌ No private key available for decryption");
-                text = "[Decryption Error - No Key]";
-              } else {
-                const { aesKey: derived, rawKeyBase64 } =
-                  await cryptoLib.deriveSharedAESKey(myPriv, m.meta.senderPublicKey);
-
-                text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
-                cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-                setAesKey(derived);
-                console.log("✅ Successfully decrypted using sender's public key from meta");
-              }
-            } catch (retryErr) {
-              console.error("❌ Retry decryption failed:", retryErr);
-              text = "[Decryption Error]";
+        
+        // Only process messages relevant to this chat window
+        // Message should be either:
+        // - From the other user to me (m.senderId === other._id && m.receiverId === myUserId)
+        // - Or from me to the other user (but we handle sent messages differently)
+        const isFromOtherToMe = String(m.senderId) === String(other._id) && String(m.receiverId) === String(myUserId);
+        const isFromMeToOther = String(m.senderId) === String(myUserId) && String(m.receiverId) === String(other._id);
+        
+        // Skip if this message is not for this conversation
+        if (!isFromOtherToMe && !isFromMeToOther) {
+          return;
+        }
+        
+        // For messages we sent, they're already added to history when sent, so skip
+        if (isFromMeToOther) {
+          return;
+        }
+        
+        const myPriv = await loadLocalPrivateKey();
+        if (!myPriv) {
+          console.error("❌ No private key available for decryption");
+          appendNewMessage({
+            ...m,
+            plaintext: "[Decryption Error - No Key]",
+            isMe: false,
+          });
+          return;
+        }
+        
+        let text = "[Decryption Error]";
+        let decryptionSucceeded = false;
+        
+        // Log message details for debugging
+        console.log("📥 Incoming message for decryption:", {
+          senderId: m.senderId,
+          receiverId: m.receiverId,
+          hasMeta: !!m.meta,
+          hasSenderPublicKey: !!m.meta?.senderPublicKey,
+          senderPublicKeyLength: m.meta?.senderPublicKey?.length,
+          ciphertextLength: m.ciphertext?.length,
+          isFromOtherToMe,
+          isFromMeToOther
+        });
+        
+        // Strategy 1: Use sender's public key from message meta (most reliable for messages from others)
+        // The sender encrypted with: senderPrivateKey + myPublicKey
+        // I decrypt with: myPrivateKey + senderPublicKey (from meta) = same shared secret
+        if (m.meta?.senderPublicKey) {
+          try {
+            console.log("🔑 Strategy 1: Attempting decryption with sender's public key from message meta");
+            console.log("   Sender ID:", m.senderId);
+            console.log("   Sender's public key (first 50 chars):", m.meta.senderPublicKey.substring(0, 50));
+            console.log("   Sender's public key length:", m.meta.senderPublicKey.length);
+            console.log("   Ciphertext length:", m.ciphertext.length);
+            console.log("   Has my private key:", !!myPriv);
+            
+            const { aesKey: derived, rawKeyBase64 } =
+              await cryptoLib.deriveSharedAESKey(myPriv, m.meta.senderPublicKey);
+            console.log("   ✅ Key derived successfully");
+            
+            text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
+            console.log("   ✅ Decrypted successfully, text:", text.substring(0, 50));
+            
+            cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
+            
+            // If this is a message for the current chat, update the aesKey state
+            if (String(m.receiverId) === String(myUserId) && String(other._id) === String(m.senderId)) {
+              setAesKey(derived);
             }
-          } else {
-            // Try fetching sender's public key from server
-            try {
-              console.log("🔄 Fetching sender's public key from server");
-              const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
-              if (senderUser.ecdhPublicKey) {
-                const myPriv = await loadLocalPrivateKey();
-                if (myPriv) {
-                  const { aesKey: derived, rawKeyBase64 } =
-                    await cryptoLib.deriveSharedAESKey(myPriv, senderUser.ecdhPublicKey);
-                  text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
-                  cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-                  setAesKey(derived);
-                  console.log("✅ Successfully decrypted using sender's current public key");
-                } else {
-                  text = "[Decryption Error - No Key]";
-                }
-              } else {
-                text = "[Decryption Error - No Sender Key]";
-              }
-            } catch (fetchErr) {
-              console.error("❌ Failed to fetch sender's key:", fetchErr);
-              text = "[Decryption Error]";
+            
+            console.log("✅ Successfully decrypted using sender's public key from meta");
+            decryptionSucceeded = true;
+          } catch (metaErr) {
+            console.error("❌ Strategy 1 failed - Decryption with sender's key from meta failed:");
+            console.error("   Error name:", metaErr.name);
+            console.error("   Error message:", metaErr.message);
+            console.error("   Error details:", {
+              hasPrivateKey: !!myPriv,
+              hasSenderPublicKey: !!m.meta.senderPublicKey,
+              senderPublicKeyLength: m.meta.senderPublicKey?.length,
+              ciphertextLength: m.ciphertext?.length,
+              senderPublicKeyValid: m.meta.senderPublicKey && m.meta.senderPublicKey.length > 100
+            });
+            if (metaErr.stack) console.error("   Stack:", metaErr.stack);
+            
+            // Check if it's a Web Crypto API error
+            if (metaErr.name === "NotSupportedError" || metaErr.name === "InvalidAccessError" || 
+                metaErr.message.includes("secure context") || metaErr.message.includes("crypto")) {
+              console.error("🚨 Web Crypto API error detected - this may be due to insecure context");
+              console.error("   isSecureContext:", window.isSecureContext);
+              console.error("   protocol:", window.location.protocol);
             }
           }
+        } else {
+          console.warn("⚠️ Strategy 1 skipped - No senderPublicKey in message meta");
+          console.warn("   Message meta:", m.meta);
+          console.warn("   Message ID:", m.id || m._id);
+          console.warn("   This is likely an old message or message sent without proper meta");
+        }
+        
+        // Strategy 2: Try cached AES key for this sender
+        if (!decryptionSucceeded) {
+          const cachedKeyB64 = cryptoLib.loadAesKeyForUser(m.senderId);
+          if (cachedKeyB64) {
+            try {
+              console.log("🔑 Attempting decryption with cached AES key for sender");
+              const cachedKey = await cryptoLib.importAesKeyFromRawBase64(cachedKeyB64);
+              text = await cryptoLib.decryptWithAesKey(cachedKey, m.ciphertext);
+              console.log("✅ Successfully decrypted using cached AES key");
+              decryptionSucceeded = true;
+            } catch (cachedErr) {
+              console.warn("⚠️ Decryption with cached key failed:", cachedErr.message);
+            }
+          }
+        }
+        
+        // Strategy 3: Try current aesKey (only if it's for the current chat)
+        if (!decryptionSucceeded && aesKey && String(other._id) === String(m.senderId)) {
+          try {
+            console.log("🔑 Attempting decryption with current chat's AES key");
+            text = await cryptoLib.decryptWithAesKey(aesKey, m.ciphertext);
+            console.log("✅ Successfully decrypted using current chat's AES key");
+            decryptionSucceeded = true;
+          } catch (currentErr) {
+            console.warn("⚠️ Decryption with current AES key failed:", currentErr.message);
+          }
+        }
+        
+        // Strategy 4: Fetch sender's public key from server
+        if (!decryptionSucceeded) {
+          try {
+            console.log("🔑 Fetching sender's public key from server");
+            const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
+            if (senderUser?.ecdhPublicKey) {
+              const { aesKey: derived, rawKeyBase64 } =
+                await cryptoLib.deriveSharedAESKey(myPriv, senderUser.ecdhPublicKey);
+              text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
+              cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
+              
+              // If this is a message for the current chat, update the aesKey state
+              if (String(m.receiverId) === String(myUserId) && String(other._id) === String(m.senderId)) {
+                setAesKey(derived);
+              }
+              
+              console.log("✅ Successfully decrypted using sender's public key from server");
+              decryptionSucceeded = true;
+            }
+          } catch (fetchErr) {
+            console.error("❌ Failed to fetch/use sender's key from server:", fetchErr);
+          }
+        }
+        
+        // If all strategies failed
+        if (!decryptionSucceeded) {
+          console.error("❌ All decryption strategies failed for message from:", m.senderId);
+          console.error("   Message details:", {
+            id: m.id,
+            senderId: m.senderId,
+            receiverId: m.receiverId,
+            hasMeta: !!m.meta,
+            hasSenderPublicKeyInMeta: !!m.meta?.senderPublicKey,
+            ciphertextLength: m.ciphertext?.length,
+            createdAt: m.createdAt
+          });
+          console.error("   Available info:", {
+            hasMyPrivateKey: !!myPriv,
+            currentChatUserId: other._id,
+            isForCurrentChat: String(m.senderId) === String(other._id)
+          });
+          text = "[Decryption Error]";
         }
 
         appendNewMessage({
           ...m,
           plaintext: text,
-          isMe: String(m.senderId) === String(myUserId),
+          isMe: false,
         });
       } catch (err) {
         console.error("❌ Decrypt failed:", err);
@@ -373,7 +527,7 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
     socket.on("message", handler);
     return () => socket.off("message", handler);
-  }, [socket, aesKey, myUserId]);
+  }, [socket, aesKey, myUserId, other._id]);
 
   /* ---------- Auto-scroll ---------- */
   useEffect(() => {
@@ -387,16 +541,35 @@ export default function ChatWindow({ other, socket, myUserId }) {
       return;
     }
     try {
-      const myPublicKey = await cryptoLib.getLocalPublicKey();
+      const myPublicKey = cryptoLib.getLocalPublicKey();
+      if (!myPublicKey) {
+        console.error("❌ Cannot send: No public key found in localStorage");
+        toast.error("⚠️ Missing encryption key. Please log out and log back in.");
+        return;
+      }
+      
       console.log("📤 Sending message:", {
         textLength: text.length,
         hasAesKey: !!aesKey,
         hasPublicKey: !!myPublicKey,
-        publicKeyLength: myPublicKey?.length
+        publicKeyLength: myPublicKey.length,
+        receiverId: other._id
       });
       
       const c = await cryptoLib.encryptWithAesKey(aesKey, text);
       console.log("✅ Message encrypted, ciphertext length:", c.length);
+      
+      // Verify encryption worked by trying to decrypt it (for debugging)
+      try {
+        const testDecrypt = await cryptoLib.decryptWithAesKey(aesKey, c);
+        if (testDecrypt !== text) {
+          console.error("🚨 Encryption verification failed - decrypted text doesn't match!");
+        } else {
+          console.log("✅ Encryption verified - can decrypt own message");
+        }
+      } catch (verifyErr) {
+        console.error("🚨 Encryption verification failed:", verifyErr);
+      }
       
       appendNewMessage({
         senderId: myUserId,
@@ -409,14 +582,32 @@ export default function ChatWindow({ other, socket, myUserId }) {
         read: false,
       });
 
-      socket.emit("sendMessage", {
+      const messagePayload = {
         receiverId: other._id,
         ciphertext: c,
         type: "text",
         meta: {
           senderPublicKey: myPublicKey,
         },
+      };
+      
+      // Verify meta is properly formatted
+      if (!messagePayload.meta || !messagePayload.meta.senderPublicKey) {
+        console.error("🚨 CRITICAL: senderPublicKey is missing from message payload!");
+        toast.error("⚠️ Encryption error: Missing public key in message");
+        return;
+      }
+      
+      console.log("📤 Emitting sendMessage with payload:", {
+        receiverId: messagePayload.receiverId,
+        ciphertextLength: messagePayload.ciphertext.length,
+        hasMeta: !!messagePayload.meta,
+        hasSenderPublicKey: !!messagePayload.meta.senderPublicKey,
+        senderPublicKeyLength: messagePayload.meta.senderPublicKey?.length,
+        senderPublicKeyPreview: messagePayload.meta.senderPublicKey?.substring(0, 50)
       });
+      
+      socket.emit("sendMessage", messagePayload);
       
       console.log("✅ Message sent with senderPublicKey in meta");
 
