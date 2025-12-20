@@ -192,6 +192,18 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
         // Fetch + decrypt history
         const { data } = await api.get(`/api/messages/history/${other._id}`);
+        console.log(`📥 Received ${data.length} messages from history API`);
+        data.forEach((msg, idx) => {
+          console.log(`📨 History message ${idx}:`, {
+            id: msg._id || msg.id,
+            hasMeta: !!msg.meta,
+            metaKeys: msg.meta ? Object.keys(msg.meta) : [],
+            hasSenderPublicKey: !!msg.meta?.senderPublicKey,
+            senderPublicKeyLength: msg.meta?.senderPublicKey?.length,
+            ciphertextLength: msg.ciphertext?.length
+          });
+        });
+        
         const decrypted = await Promise.all(
           data.map(async (m) => {
             if (!m.ciphertext) {
@@ -337,6 +349,17 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
     const handler = async (m) => {
       try {
+        console.log("🔔 Socket message received (RAW):", {
+          keys: Object.keys(m),
+          hasMeta: !!m.meta,
+          metaType: typeof m.meta,
+          metaValue: m.meta,
+          metaKeys: m.meta ? Object.keys(m.meta) : [],
+          hasSenderPublicKey: !!m.meta?.senderPublicKey,
+          senderPublicKeyInMeta: m.meta?.senderPublicKey,
+          fullMessage: JSON.stringify(m, null, 2)
+        });
+        
         if (!m.senderId || !m.ciphertext) return;
         
         // Only process messages relevant to this chat window
@@ -375,11 +398,16 @@ export default function ChatWindow({ other, socket, myUserId }) {
           senderId: m.senderId,
           receiverId: m.receiverId,
           hasMeta: !!m.meta,
+          metaType: typeof m.meta,
+          metaKeys: m.meta ? Object.keys(m.meta) : [],
           hasSenderPublicKey: !!m.meta?.senderPublicKey,
           senderPublicKeyLength: m.meta?.senderPublicKey?.length,
+          senderPublicKeyPreview: m.meta?.senderPublicKey?.substring(0, 50),
           ciphertextLength: m.ciphertext?.length,
+          ciphertextPreview: m.ciphertext?.substring(0, 50),
           isFromOtherToMe,
-          isFromMeToOther
+          isFromMeToOther,
+          fullMeta: m.meta
         });
         
         // Strategy 1: Use sender's public key from message meta (most reliable for messages from others)
