@@ -30,12 +30,25 @@ export function getLocalPublicKey() {
 
 export async function loadLocalPrivateKey() {
   const b64 = localStorage.getItem("ecdhPrivateKey");
-  if (!b64) return null;
-  const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
-  return await crypto.subtle.importKey("pkcs8", raw, algoECDH, true, [
-    "deriveKey",
-    "deriveBits",
-  ]);
+  if (!b64) {
+    console.log("❌ No private key found in localStorage");
+    return null;
+  }
+  
+  try {
+    const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+    const key = await crypto.subtle.importKey("pkcs8", raw, algoECDH, true, [
+      "deriveKey",
+      "deriveBits",
+    ]);
+    console.log("✅ Private key imported successfully");
+    return key;
+  } catch (err) {
+    console.error("❌ Failed to import private key:", err);
+    console.error("Error details:", err.message);
+    // Don't remove the key automatically - let the user try to re-login
+    return null;
+  }
 }
 
 // --------------------
