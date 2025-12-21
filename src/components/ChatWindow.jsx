@@ -52,21 +52,33 @@ export default function ChatWindow({ other, socket, myUserId }) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef();
+  const pendingLastMessageRef = useRef(null); // cache last plaintext sent (for resend fallback)
+
 
   const appendNewMessage = (m) => setHistory((prev) => [...prev, m]);
 
-  /* ---------- Initialize ECDH key pair (once per user) ---------- */
+  /* ---------- Initialize ECDH key pair (only if Web Crypto available) ---------- */
   useEffect(() => {
     (async () => {
-      // Generate ECDH keypair if not already present
-      const existingPub = localStorage.getItem("ecdhPublicKey");
-      if (!existingPub) {
-        await generateECDHKeyPair();
-        console.log("✅ ECDH key pair generated");
-      }
-      // Clear cached AES keys (optional — only once)
-      if (!localStorage.getItem("aesKeys")) {
-        localStorage.removeItem("aesKeys");
+      const hasWebCrypto = window.crypto && window.crypto.subtle;
+      
+      if (hasWebCrypto) {
+        // Generate ECDH keypair if not already present
+        const existingPub = localStorage.getItem("ecdhPublicKey");
+        if (!existingPub) {
+          try {
+            await generateECDHKeyPair();
+            console.log("✅ ECDH key pair generated");
+          } catch (err) {
+            console.warn("⚠️ Failed to generate ECDH keys - will proceed without encryption:", err.message);
+          }
+        }
+        // Clear cached AES keys (optional — only once)
+        if (!localStorage.getItem("aesKeys")) {
+          localStorage.removeItem("aesKeys");
+        }
+      } else {
+        console.warn("⚠️ Web Crypto not available - skipping ECDH key generation");
       }
     })();
   }, []);
@@ -108,11 +120,10 @@ export default function ChatWindow({ other, socket, myUserId }) {
             
             if (!myPriv) {
               console.error("❌ Still failed to load key after retries");
-              toast.error("⚠️ Encryption key issue. Please log out and log back in.", {
-                autoClose: 5000
-              });
-              setLoading(false);
-              return;
+              console.warn("⚠️ Encryption key issue, continuing without private key (messages may be unencrypted or not decryptable)");
+              // Continue without a private key - load history and show messages accordingly
+              // Do not return here; allow the code below to continue and handle missing key
+              
             }
             
             console.log("✅ Successfully loaded newly generated private key");
@@ -128,24 +139,21 @@ export default function ChatWindow({ other, socket, myUserId }) {
             console.error("❌ Failed to generate new key:", genErr);
             console.error("Error name:", genErr.name);
             console.error("Error message:", genErr.message);
-            toast.error("⚠️ Failed to generate encryption keys. Please log out and log back in.", {
-              autoClose: 5000
-            });
-            setLoading(false);
-            return;
+            console.warn("⚠️ Failed to generate encryption keys - proceeding without encryption");
+            // Continue without private key (messages will be unencrypted or show as encrypted/no-key)
+            myPriv = null;
           }
         }
         
         if (!myPriv) {
-          toast.error("⚠️ Missing local ECDH private key. Please re-login.");
-          setLoading(false);
-          return;
+          console.warn("⚠️ Missing local ECDH private key - continuing without encryption");
+          // Don't return; proceed to fetch history and display messages (may be encrypted or plaintext)
         }
 
-        // 🚨 Handle case: recipient has no ECDH public key yet
+        // If recipient has no public key, warn but continue — allow unencrypted messages and history
         if (!otherUser.ecdhPublicKey) {
           toast.warning(
-            `⚠️ ${otherUser.displayName || otherUser.username} hasn’t logged in yet. You can message them once they’re online.`,
+            `⚠️ ${otherUser.displayName || otherUser.username} hasn’t uploaded an encryption key. Messages will be sent unencrypted.`,
             {
               toastId: `no-key-${otherUser._id}`,
               position: "top-center",
@@ -154,38 +162,39 @@ export default function ChatWindow({ other, socket, myUserId }) {
             }
           );
           setHasRecipientKey(false);
-          setLoading(false);
-          return;
+          // continue without returning — we'll fetch history and show messages as plaintext when needed
         } else {
           setHasRecipientKey(true);
         }
 
-        // Derive AES key - always re-derive to ensure we use the latest public key
-        console.log("🔑 Deriving AES key for user:", otherUser.username);
+        // Attempt to derive AES key only if both sides have keys
+        console.log("🔑 Attempting AES key derivation for user:", otherUser.username);
         console.log("   Other user's public key length:", otherUser.ecdhPublicKey?.length);
         console.log("   My public key length:", cryptoLib.getLocalPublicKey()?.length);
         
-        let importedKey;
-        try {
-          // Verify we have the recipient's public key
-          if (!otherUser.ecdhPublicKey) {
-            throw new Error("Recipient has no public key");
+        let importedKey = null;
+        if (otherUser.ecdhPublicKey && myPriv) {
+          try {
+            const derived = await cryptoLib.deriveSharedAESKey(
+              myPriv,
+              otherUser.ecdhPublicKey
+            );
+            importedKey = await cryptoLib.importAesKeyFromRawBase64(
+              derived.rawKeyBase64
+            );
+            // Always update cached key to ensure it's current
+            cryptoLib.saveAesKeyForUser(other._id, derived.rawKeyBase64);
+            console.log("✅ AES key derived and cached successfully");
+          } catch (deriveErr) {
+            console.error("❌ Failed to derive AES key:", deriveErr);
+            console.warn("⚠️ Continuing without AES key (messages will be unencrypted or not decryptable)");
+            importedKey = null;
           }
-          
-          const derived = await cryptoLib.deriveSharedAESKey(
-            myPriv,
-            otherUser.ecdhPublicKey
-          );
-          importedKey = await cryptoLib.importAesKeyFromRawBase64(
-            derived.rawKeyBase64
-          );
-          // Always update cached key to ensure it's current
-          cryptoLib.saveAesKeyForUser(other._id, derived.rawKeyBase64);
-          console.log("✅ AES key derived and cached successfully");
-        } catch (deriveErr) {
-          console.error("❌ Failed to derive AES key:", deriveErr);
-          console.error("   Error details:", deriveErr.message);
-          throw new Error("Could not derive AES key for encryption");
+        } else {
+          console.log("⚠️ Skipping AES key derivation (missing recipient public key or local private key)", {
+            hasRecipientPublicKey: !!otherUser.ecdhPublicKey,
+            hasLocalPrivateKey: !!myPriv
+          });
         }
 
         setAesKey(importedKey);
@@ -210,6 +219,34 @@ export default function ChatWindow({ other, socket, myUserId }) {
               return {
                 ...m,
                 plaintext: "[No ciphertext]",
+                isMe: m.senderId === myUserId,
+              };
+            }
+            
+            // Check if message is marked as unencrypted
+            if (m.meta?.unencrypted) {
+              console.log("📥 Unencrypted message in history:", {
+                id: m._id || m.id,
+                plaintext: m.ciphertext.substring(0, 50)
+              });
+              return {
+                ...m,
+                plaintext: m.ciphertext,
+                isMe: m.senderId === myUserId,
+              };
+            }
+            
+            // Validate encrypted ciphertext length - must be at least 29 bytes
+            if (m.ciphertext.length < 29) {
+              console.error("❌ Encrypted message too short - may be unencrypted:", {
+                id: m._id || m.id,
+                length: m.ciphertext.length,
+                meta: m.meta,
+              });
+              // Try to use as plaintext anyway
+              return {
+                ...m,
+                plaintext: m.ciphertext,
                 isMe: m.senderId === myUserId,
               };
             }
@@ -349,42 +386,28 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
     const handler = async (m) => {
       try {
-        console.log("🔔 Socket message received (RAW):", {
-          keys: Object.keys(m),
-          hasMeta: !!m.meta,
-          metaType: typeof m.meta,
-          metaValue: m.meta,
-          metaKeys: m.meta ? Object.keys(m.meta) : [],
-          hasSenderPublicKey: !!m.meta?.senderPublicKey,
-          senderPublicKeyInMeta: m.meta?.senderPublicKey,
-          fullMessage: JSON.stringify(m, null, 2)
-        });
+        console.log("🔔 Socket message received");
         
         if (!m.senderId || !m.ciphertext) return;
         
-        // Only process messages relevant to this chat window
-        // Message should be either:
-        // - From the other user to me (m.senderId === other._id && m.receiverId === myUserId)
-        // - Or from me to the other user (but we handle sent messages differently)
-        const isFromOtherToMe = String(m.senderId) === String(other._id) && String(m.receiverId) === String(myUserId);
-        const isFromMeToOther = String(m.senderId) === String(myUserId) && String(m.receiverId) === String(other._id);
-        
-        // Skip if this message is not for this conversation
-        if (!isFromOtherToMe && !isFromMeToOther) {
-          return;
-        }
-        
-        // For messages we sent, they're already added to history when sent, so skip
-        if (isFromMeToOther) {
-          return;
-        }
-        
-        const myPriv = await loadLocalPrivateKey();
-        if (!myPriv) {
-          console.error("❌ No private key available for decryption");
+        // Check if message is unencrypted
+        if (m.meta?.unencrypted) {
+          console.log("📥 Unencrypted message received");
           appendNewMessage({
             ...m,
-            plaintext: "[Decryption Error - No Key]",
+            plaintext: m.ciphertext,
+            isMe: false,
+          });
+          return;
+        }
+        
+        // Encrypted message - try to decrypt
+        const myPriv = await loadLocalPrivateKey();
+        if (!myPriv) {
+          console.warn("⚠️ No private key - showing encrypted message");
+          appendNewMessage({
+            ...m,
+            plaintext: "[Encrypted - no key]",
             isMe: false,
           });
           return;
@@ -393,168 +416,129 @@ export default function ChatWindow({ other, socket, myUserId }) {
         let text = "[Decryption Error]";
         let decryptionSucceeded = false;
         
-        // Log message details for debugging
-        console.log("📥 Incoming message for decryption:", {
-          senderId: m.senderId,
-          receiverId: m.receiverId,
-          hasMeta: !!m.meta,
-          metaType: typeof m.meta,
-          metaKeys: m.meta ? Object.keys(m.meta) : [],
-          hasSenderPublicKey: !!m.meta?.senderPublicKey,
-          senderPublicKeyLength: m.meta?.senderPublicKey?.length,
-          senderPublicKeyPreview: m.meta?.senderPublicKey?.substring(0, 50),
-          ciphertextLength: m.ciphertext?.length,
-          ciphertextPreview: m.ciphertext?.substring(0, 50),
-          isFromOtherToMe,
-          isFromMeToOther,
-          fullMeta: m.meta
-        });
-        
-        // Strategy 1: Use sender's public key from message meta (most reliable for messages from others)
-        // The sender encrypted with: senderPrivateKey + myPublicKey
-        // I decrypt with: myPrivateKey + senderPublicKey (from meta) = same shared secret
+        // Try to decrypt with sender's public key from meta
         if (m.meta?.senderPublicKey) {
           try {
-            console.log("🔑 Strategy 1: Attempting decryption with sender's public key from message meta");
-            console.log("   Sender ID:", m.senderId);
-            console.log("   Sender's public key (first 50 chars):", m.meta.senderPublicKey.substring(0, 50));
-            console.log("   Sender's public key length:", m.meta.senderPublicKey.length);
-            console.log("   Ciphertext length:", m.ciphertext.length);
-            console.log("   Has my private key:", !!myPriv);
-            
-            const { aesKey: derived, rawKeyBase64 } =
-              await cryptoLib.deriveSharedAESKey(myPriv, m.meta.senderPublicKey);
-            console.log("   ✅ Key derived successfully");
-            
+            const { aesKey: derived } = await cryptoLib.deriveSharedAESKey(myPriv, m.meta.senderPublicKey);
             text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
-            console.log("   ✅ Decrypted successfully, text:", text.substring(0, 50));
-            
-            cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-            
-            // If this is a message for the current chat, update the aesKey state
-            if (String(m.receiverId) === String(myUserId) && String(other._id) === String(m.senderId)) {
-              setAesKey(derived);
-            }
-            
-            console.log("✅ Successfully decrypted using sender's public key from meta");
             decryptionSucceeded = true;
+            console.log("✅ Decrypted with sender's public key from meta");
           } catch (metaErr) {
-            console.error("❌ Strategy 1 failed - Decryption with sender's key from meta failed:");
-            console.error("   Error name:", metaErr.name);
-            console.error("   Error message:", metaErr.message);
-            console.error("   Error details:", {
-              hasPrivateKey: !!myPriv,
-              hasSenderPublicKey: !!m.meta.senderPublicKey,
-              senderPublicKeyLength: m.meta.senderPublicKey?.length,
-              ciphertextLength: m.ciphertext?.length,
-              senderPublicKeyValid: m.meta.senderPublicKey && m.meta.senderPublicKey.length > 100
-            });
-            if (metaErr.stack) console.error("   Stack:", metaErr.stack);
-            
-            // Check if it's a Web Crypto API error
-            if (metaErr.name === "NotSupportedError" || metaErr.name === "InvalidAccessError" || 
-                metaErr.message.includes("secure context") || metaErr.message.includes("crypto")) {
-              console.error("🚨 Web Crypto API error detected - this may be due to insecure context");
-              console.error("   isSecureContext:", window.isSecureContext);
-              console.error("   protocol:", window.location.protocol);
+            console.warn("⚠️ Decryption with sender key failed:", metaErr.message);
+            // If the message is very short, it might be plaintext
+            if (m.ciphertext.length < 29) {
+              console.warn("   Message is very short - treating as plaintext");
+              text = m.ciphertext;
+              decryptionSucceeded = true;
             }
           }
-        } else {
-          console.warn("⚠️ Strategy 1 skipped - No senderPublicKey in message meta");
-          console.warn("   Message meta:", m.meta);
-          console.warn("   Message ID:", m.id || m._id);
-          console.warn("   This is likely an old message or message sent without proper meta");
         }
         
-        // Strategy 2: Try cached AES key for this sender
-        if (!decryptionSucceeded) {
+        // Try cached key if first attempt failed
+        if (!decryptionSucceeded && m.senderId) {
           const cachedKeyB64 = cryptoLib.loadAesKeyForUser(m.senderId);
           if (cachedKeyB64) {
             try {
-              console.log("🔑 Attempting decryption with cached AES key for sender");
               const cachedKey = await cryptoLib.importAesKeyFromRawBase64(cachedKeyB64);
               text = await cryptoLib.decryptWithAesKey(cachedKey, m.ciphertext);
-              console.log("✅ Successfully decrypted using cached AES key");
               decryptionSucceeded = true;
-            } catch (cachedErr) {
-              console.warn("⚠️ Decryption with cached key failed:", cachedErr.message);
+              console.log("✅ Decrypted with cached key");
+            } catch (err) {
+              console.warn("⚠️ Cached key decryption failed");
             }
           }
         }
         
-        // Strategy 3: Try current aesKey (only if it's for the current chat)
-        if (!decryptionSucceeded && aesKey && String(other._id) === String(m.senderId)) {
+        // Try current aesKey
+        if (!decryptionSucceeded && aesKey) {
           try {
-            console.log("🔑 Attempting decryption with current chat's AES key");
             text = await cryptoLib.decryptWithAesKey(aesKey, m.ciphertext);
-            console.log("✅ Successfully decrypted using current chat's AES key");
             decryptionSucceeded = true;
-          } catch (currentErr) {
-            console.warn("⚠️ Decryption with current AES key failed:", currentErr.message);
-          }
-        }
-        
-        // Strategy 4: Fetch sender's public key from server
-        if (!decryptionSucceeded) {
-          try {
-            console.log("🔑 Fetching sender's public key from server");
-            const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
-            if (senderUser?.ecdhPublicKey) {
-              const { aesKey: derived, rawKeyBase64 } =
-                await cryptoLib.deriveSharedAESKey(myPriv, senderUser.ecdhPublicKey);
-              text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
-              cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
-              
-              // If this is a message for the current chat, update the aesKey state
-              if (String(m.receiverId) === String(myUserId) && String(other._id) === String(m.senderId)) {
-                setAesKey(derived);
-              }
-              
-              console.log("✅ Successfully decrypted using sender's public key from server");
+            console.log("✅ Decrypted with current AES key");
+          } catch (err) {
+            console.warn("⚠️ Current AES key decryption failed");
+            // If message is short, treat as plaintext
+            if (m.ciphertext.length < 29) {
+              console.warn("   Message is very short - treating as plaintext");
+              text = m.ciphertext;
               decryptionSucceeded = true;
             }
-          } catch (fetchErr) {
-            console.error("❌ Failed to fetch/use sender's key from server:", fetchErr);
           }
         }
         
-        // If all strategies failed
-        if (!decryptionSucceeded) {
-          console.error("❌ All decryption strategies failed for message from:", m.senderId);
-          console.error("   Message details:", {
-            id: m.id,
-            senderId: m.senderId,
-            receiverId: m.receiverId,
-            hasMeta: !!m.meta,
-            hasSenderPublicKeyInMeta: !!m.meta?.senderPublicKey,
-            ciphertextLength: m.ciphertext?.length,
-            createdAt: m.createdAt
-          });
-          console.error("   Available info:", {
-            hasMyPrivateKey: !!myPriv,
-            currentChatUserId: other._id,
-            isForCurrentChat: String(m.senderId) === String(other._id)
-          });
-          text = "[Decryption Error]";
+        // If still not decrypted and message is short, treat as plaintext
+        if (!decryptionSucceeded && m.ciphertext.length < 29) {
+          console.warn("⚠️ Could not decrypt - treating short message as plaintext");
+          text = m.ciphertext;
+          decryptionSucceeded = true;
         }
 
         appendNewMessage({
           ...m,
-          plaintext: text,
+          plaintext: decryptionSucceeded ? text : "[Decryption Error]",
           isMe: false,
         });
       } catch (err) {
-        console.error("❌ Decrypt failed:", err);
+        console.error("❌ Message handler error:", err);
         appendNewMessage({
           ...m,
-          plaintext: "[Decryption Error]",
-          isMe: String(m.senderId) === String(myUserId),
+          plaintext: "[Error]",
+          isMe: false,
         });
       }
     };
 
     socket.on("message", handler);
-    return () => socket.off("message", handler);
+    
+    // Handle send errors from the server
+    const errorHandler = (error) => {
+      console.error("❌ Server rejected message:", error);
+      // If server asks us to resend unencrypted because recipient has no private key, do a fallback resend
+      if (error?.reason === 'recipient_no_private_key') {
+        const pending = pendingLastMessageRef.current;
+        if (pending && pending.receiverId && pending.plaintext) {
+          // Update the previously appended pending message (matching tempId) instead of appending a duplicate
+          const { tempId, plaintext } = pending;
+          setHistory((prev) => prev.map((msg) => {
+            if (tempId && msg.tempId === tempId) {
+              return {
+                ...msg,
+                ciphertext: plaintext,
+                meta: { ...(msg.meta || {}), unencrypted: true },
+                tempId: undefined
+              };
+            }
+            return msg;
+          }));
+
+          // Emit as unencrypted
+          socket.emit('sendMessage', {
+            receiverId: pending.receiverId,
+            ciphertext: pending.plaintext,
+            type: 'text',
+            meta: { unencrypted: true }
+          });
+
+          // Clear pending
+          pendingLastMessageRef.current = null;
+
+          // Silent resend - no toast
+        } else {
+          // No pending message cached: let user know to retry
+          toast.error('Recipient cannot decrypt encrypted messages; please resend without encryption.');
+        }
+        return;
+      }
+
+      toast.error(`❌ Message failed: ${error.message || error.reason}`);
+    };
+    
+    socket.on("errorSending", errorHandler);
+    
+    return () => {
+      socket.off("message", handler);
+      socket.off("errorSending", errorHandler);
+    };
   }, [socket, aesKey, myUserId, other._id]);
 
   /* ---------- Auto-scroll ---------- */
@@ -564,10 +548,54 @@ export default function ChatWindow({ other, socket, myUserId }) {
 
   /* ---------- Send text ---------- */
   async function send() {
-    if (!text.trim() || !aesKey) {
-      console.error("❌ Cannot send: missing text or AES key");
+    if (!text.trim()) {
+      console.error("❌ Cannot send: text is empty");
       return;
     }
+    
+    // Check if encryption is available
+    const hasWebCrypto = window.crypto && window.crypto.subtle;
+
+    // Fetch recipient status to decide whether to encrypt
+    let recipientUser = null;
+    try {
+      const res = await api.get(`/api/users/${other._id}`);
+      recipientUser = res.data;
+    } catch (err) {
+      console.warn('⚠️ Could not fetch recipient info, proceeding with conservative defaults', err.message);
+    }
+
+    // Force unencrypted if recipient has no public key or message is very short
+    const forceUnencrypted = !recipientUser?.ecdhPublicKey || text.length < 8;
+
+    if (!hasWebCrypto || !aesKey || forceUnencrypted) {
+      console.warn('⚠️ Sending message without encryption', { hasWebCrypto, aesKeyPresent: !!aesKey, forceUnencrypted });
+      // Send message without encryption
+      appendNewMessage({
+        senderId: myUserId,
+        receiverId: other._id,
+        plaintext: text,
+        ciphertext: text, // Send plaintext as "ciphertext"
+        type: "text",
+        createdAt: new Date(),
+        isMe: true,
+        read: false,
+      });
+
+      const messagePayload = {
+        receiverId: other._id,
+        ciphertext: text,
+        type: "text",
+        meta: {
+          unencrypted: true, // Mark as unencrypted
+        },
+      };
+
+      socket.emit("sendMessage", messagePayload);
+      setText("");
+      return;
+    }
+
     try {
       const myPublicKey = cryptoLib.getLocalPublicKey();
       if (!myPublicKey) {
@@ -592,14 +620,25 @@ export default function ChatWindow({ other, socket, myUserId }) {
         const testDecrypt = await cryptoLib.decryptWithAesKey(aesKey, c);
         if (testDecrypt !== text) {
           console.error("🚨 Encryption verification failed - decrypted text doesn't match!");
+          toast.error("⚠️ Encryption verification failed. Message not sent.", {
+            autoClose: 3000
+          });
+          return;
         } else {
           console.log("✅ Encryption verified - can decrypt own message");
         }
       } catch (verifyErr) {
         console.error("🚨 Encryption verification failed:", verifyErr);
+        toast.error("⚠️ Encryption failed. Message not sent.", {
+          autoClose: 3000
+        });
+        return;
       }
       
+      // Use a temporary id so we can update (not append) if we need to resend as plaintext
+      const tempId = `pending:${Date.now()}`;
       appendNewMessage({
+        tempId,
         senderId: myUserId,
         receiverId: other._id,
         plaintext: text,
@@ -632,9 +671,15 @@ export default function ChatWindow({ other, socket, myUserId }) {
         hasMeta: !!messagePayload.meta,
         hasSenderPublicKey: !!messagePayload.meta.senderPublicKey,
         senderPublicKeyLength: messagePayload.meta.senderPublicKey?.length,
-        senderPublicKeyPreview: messagePayload.meta.senderPublicKey?.substring(0, 50)
+        senderPublicKeyPreview: messagePayload.meta.senderPublicKey?.substring(0, 50),
+        tempId
       });
       
+      // Save pending plaintext so we can auto-resend if server rejects due to recipient lacking private key
+      pendingLastMessageRef.current = { receiverId: other._id, plaintext: text, tempId };
+      // Clear pending after a short window (server should respond quickly if there's an error)
+      setTimeout(() => { if (pendingLastMessageRef.current && pendingLastMessageRef.current.receiverId === other._id) pendingLastMessageRef.current = null; }, 3000);
+
       socket.emit("sendMessage", messagePayload);
       
       console.log("✅ Message sent with senderPublicKey in meta");
@@ -643,6 +688,9 @@ export default function ChatWindow({ other, socket, myUserId }) {
     } catch (err) {
       console.error("❌ Failed to send", err);
       console.error("Error details:", err.message, err.stack);
+      toast.error("⚠️ Failed to send message. Check console for details.", {
+        autoClose: 3000
+      });
     }
   }
 
@@ -725,6 +773,40 @@ export default function ChatWindow({ other, socket, myUserId }) {
       {/* Header */}
       <div className="border-b p-3 font-semibold bg-gray-100 flex justify-between items-center">
         <span>{other.displayName || other.username}</span>
+        {/* Regenerate keys (always visible; disabled when Web Crypto unavailable) */}
+        <button
+          className={`text-sm mr-3 ${window.crypto && window.crypto.subtle ? 'text-gray-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
+          onClick={async () => {
+            if (!(window.crypto && window.crypto.subtle)) {
+              toast.info(
+                '🔒 Web Crypto not available here. To generate keys, use a secure context (HTTPS or localhost) or regenerate on another device and upload the public key.',
+                { autoClose: 6000 }
+              );
+              return;
+            }
+
+            try {
+              const { privB64, pubB64 } = await generateECDHKeyPair();
+              await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
+              toast.success('🔑 Keys regenerated and uploaded', { autoClose: 3000 });
+              console.log('✅ Keys regenerated and uploaded');
+              // Notify server of new capability
+              try {
+                socket && socket.emit('capabilities', { hasPrivateKey: true, hasWebCrypto: !!(window.crypto && window.crypto.subtle) });
+                console.log('⚙️ Capabilities updated (hasPrivateKey=true)');
+              } catch (e) {
+                console.warn('⚠️ Failed to emit capabilities after regenerate:', e.message);
+              }
+            } catch (err) {
+              console.error('❌ Regenerate keys failed:', err);
+              toast.error('⚠️ Failed to regenerate keys. See console for details.', { autoClose: 4000 });
+            }
+          }}
+          title={window.crypto && window.crypto.subtle ? 'Regenerate encryption keys' : 'Web Crypto not available on this page'}
+        >
+          🔑 Regenerate
+        </button>
+
         <button
           className="text-blue-600 hover:underline"
           onClick={() => fileInputRef.current.click()}
@@ -802,29 +884,27 @@ export default function ChatWindow({ other, socket, myUserId }) {
       </div>
 
       {/* Input */}
-      {!hasRecipientKey ? (
-        <div className="p-4 text-center text-yellow-700 bg-yellow-50 border-t border-yellow-300">
-          ⚠️ {other.displayName || other.username} hasn’t logged in yet.
-          <br />
-          You’ll be able to message them once they log in.
-        </div>
-      ) : (
-        <div className="p-3 border-t flex gap-2 bg-gray-50 sticky bottom-0">
-          <input
-            className="flex-1 border rounded px-3 py-2 text-sm"
-            placeholder="Type a message..."
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-          />
-          <button
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-            onClick={send}
-          >
-            Send
-          </button>
+      {!hasRecipientKey && (
+        <div className="p-2 text-sm text-yellow-800 bg-yellow-50 border-t border-yellow-200 text-center">
+          ⚠️ {other.displayName || other.username} does not have an encryption key. Messages will be sent unencrypted.
         </div>
       )}
+
+      <div className="p-3 border-t flex gap-2 bg-gray-50 sticky bottom-0">
+        <input
+          className="flex-1 border rounded px-3 py-2 text-sm"
+          placeholder="Type a message..."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+        />
+        <button
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          onClick={send}
+        >
+          Send
+        </button>
+      </div>
     </div>
   );
 }

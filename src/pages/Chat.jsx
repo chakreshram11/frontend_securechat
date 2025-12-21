@@ -45,14 +45,67 @@ export default function Chat({ token, onLogout }) {
       setGroups(userGroups);
     } catch (err) {
       console.error("Failed to load users/groups", err);
+      
+      // Check if it's a network error vs auth error
+      if (!err.response) {
+        // Network error
+        toast.error("❌ Cannot reach backend server. Please check your connection and try again.", {
+          autoClose: false,
+          closeButton: true
+        });
+      } else if (err.response.status === 401) {
+        // Unauthorized - token expired
+        console.log("🔑 Token expired, logging out");
+        onLogout();
+      }
     }
   }
   init();
 
-  const socket = io(import.meta.env.VITE_API_BASE || "http://localhost:5000", {
+  // Determine socket server URL (same logic as API client)
+  const getSocketUrl = () => {
+    const envBase = import.meta.env.VITE_API_BASE;
+    if (envBase && envBase.trim()) {
+      return envBase;
+    }
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+      return "http://localhost:5000";
+    }
+    return `${protocol}//${hostname}:5000`;
+  };
+
+  const socket = io(getSocketUrl(), {
     auth: { token },
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    reconnectionAttempts: 5
   });
   socketRef.current = socket;
+
+  // Report client capabilities (hasPrivateKey, hasWebCrypto) once connected
+  (async () => {
+    try {
+      const hasWebCrypto = !!(window.crypto && window.crypto.subtle);
+      let hasPrivateKey = false;
+      if (hasWebCrypto && localStorage.getItem('ecdhPrivateKey')) {
+        try {
+          const raw = Uint8Array.from(atob(localStorage.getItem('ecdhPrivateKey')), c => c.charCodeAt(0)).buffer;
+          await window.crypto.subtle.importKey('pkcs8', raw, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey', 'deriveBits']);
+          hasPrivateKey = true;
+        } catch (e) {
+          console.warn('⚠️ Found stored private key but import failed:', e.message);
+          hasPrivateKey = false;
+        }
+      }
+      socket.emit('capabilities', { hasPrivateKey, hasWebCrypto });
+      console.log('⚙️ Capabilities reported to server:', { hasPrivateKey, hasWebCrypto });
+    } catch (err) {
+      console.warn('⚠️ Failed to report capabilities:', err.message);
+    }
+  })();
 
   // Handlers (named so cleanup works reliably)
   const onUserNew = (newUser) => {

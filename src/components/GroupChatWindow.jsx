@@ -13,6 +13,7 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
   const [memberKeys, setMemberKeys] = useState({}); // userId -> AES key
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef();
+  const pendingMessagesRef = useRef({}); // memberId -> { tempId, plaintext, ciphertext }
 
   const appendNewMessage = (m) => setHistory((prev) => [...prev, m]);
 
@@ -32,9 +33,9 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
         
         const myPriv = await loadLocalPrivateKey();
         if (!myPriv) {
-          toast.error("⚠️ Missing encryption key. Please log out and log back in.");
-          setLoading(false);
-          return;
+          console.warn("⚠️ Missing local private key - proceeding without decryption. Group will show unencrypted or placeholder messages.");
+          // Non-blocking warning removed (silent fallback to ChatWindow behavior)
+          // continue without returning; myPriv will be null and decryption attempts will be skipped
         }
 
         // Decrypt messages
@@ -53,6 +54,37 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
             const isMe = String(senderId) === String(myUserId);
             let plaintext = null;
             let senderName = m.senderId?.displayName || m.senderId?.username || "Unknown";
+
+            // If this message is explicitly unencrypted, treat as plaintext
+            if (m.meta?.unencrypted) {
+              return {
+                ...m,
+                plaintext: m.ciphertext,
+                isMe,
+                senderName,
+              };
+            }
+
+            // If ciphertext is very short, treat as plaintext (backwards compatibility)
+            if (m.ciphertext.length < 29) {
+              return {
+                ...m,
+                plaintext: m.ciphertext,
+                isMe,
+                senderName,
+              };
+            }
+
+            // If we don't have a local private key, we cannot decrypt encrypted messages
+            if (!myPriv) {
+              console.warn('⚠️ Cannot decrypt group message (no local private key) - showing placeholder');
+              return {
+                ...m,
+                plaintext: "[Encrypted - no key]",
+                isMe,
+                senderName,
+              };
+            }
 
             // Strategy 1: Try cached AES key for this sender
             if (senderId) {
@@ -142,7 +174,26 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
           })
         );
 
-        setHistory(decrypted);
+        // Merge pending messages (per-member) so locally-sent pending items are not lost
+        const pendingEntries = Object.values(pendingMessagesRef.current || {}).map(p => ({
+          tempId: p.tempId,
+          senderId: myUserId,
+          groupId: String(group._id),
+          plaintext: p.plaintext,
+          ciphertext: p.ciphertext,
+          type: 'text',
+          createdAt: new Date(),
+          isMe: true,
+          senderName: 'You'
+        }));
+
+        const merged = [...decrypted];
+        pendingEntries.forEach(pe => {
+          const exists = merged.some(d => d.ciphertext === pe.ciphertext || d.tempId === pe.tempId);
+          if (!exists) merged.push(pe);
+        });
+
+        setHistory(merged);
       } catch (err) {
         console.error("❌ Error loading group chat:", err);
         toast.error("Failed to load group messages");
@@ -168,11 +219,40 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
         if (!m.ciphertext) return;
 
         const isMe = String(m.senderId) === String(myUserId);
+
+        // If message is explicitly unencrypted, show plaintext immediately
+        if (m.meta?.unencrypted || (m.ciphertext && m.ciphertext.length < 29)) {
+          let senderName = "Unknown";
+          if (m.senderId && !isMe) {
+            try {
+              const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
+              senderName = senderUser.displayName || senderUser.username || "Unknown";
+            } catch (err) {
+              console.warn("Failed to fetch sender name for plaintext message:", err.message);
+            }
+          } else if (isMe) {
+            try {
+              const { data: me } = await api.get('/api/users/me');
+              senderName = me.displayName || me.username || 'You';
+            } catch (err) {
+              senderName = 'You';
+            }
+          }
+
+          appendNewMessage({
+            ...m,
+            plaintext: m.ciphertext,
+            isMe,
+            senderName,
+          });
+          return;
+        }
+
         const myPriv = await loadLocalPrivateKey();
         if (!myPriv) {
           appendNewMessage({
             ...m,
-            plaintext: "[Decryption Error - No Key]",
+            plaintext: "[Encrypted - no key]",
             isMe,
             senderName: "Unknown",
           });
@@ -182,15 +262,45 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
         let text = "[Decryption Error]";
         let senderName = "Unknown";
 
-        // Try to decrypt
+
+        // If this is an echoed copy of a message we just sent, and we have a pending entry, update instead of appending duplicate
+        if (String(m.senderId) === String(myUserId)) {
+          // check both per-member pending and group broadcast pending
+          const pendingMember = pendingMessagesRef.current[String(myUserId)];
+          const pendingBroadcast = pendingMessagesRef.current[`${group._id}:${myUserId}`];
+          const pending = (pendingMember && pendingMember.ciphertext === m.ciphertext) ? pendingMember : (pendingBroadcast && pendingBroadcast.ciphertext === m.ciphertext) ? pendingBroadcast : null;
+          if (pending) {
+            // Update the pending message in-place: remove tempId and keep server ciphertext/createdAt
+            setHistory((prev) => prev.map((msg) => {
+              if (msg.tempId && msg.tempId === pending.tempId) {
+                return {
+                  ...msg,
+                  ciphertext: m.ciphertext,
+                  meta: { ...(msg.meta || {}), ...m.meta },
+                  createdAt: m.createdAt || msg.createdAt,
+                  tempId: undefined
+                };
+              }
+              return msg;
+            }));
+            // Clear pending for self (both keys)
+            delete pendingMessagesRef.current[String(myUserId)];
+            delete pendingMessagesRef.current[`${group._id}:${myUserId}`];
+            return; // don't continue to append duplicate
+          }
+        }
+
+        // Try to decrypt using senderPublicKey in meta first
+        let triedMeta = false;
         if (m.meta?.senderPublicKey) {
+          triedMeta = true;
           try {
             const { aesKey: derived } = await cryptoLib.deriveSharedAESKey(
               myPriv,
               m.meta.senderPublicKey
             );
             text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
-            
+
             // Cache the key
             if (m.senderId) {
               const { rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(
@@ -200,7 +310,7 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
               cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
               setMemberKeys((prev) => ({ ...prev, [m.senderId]: derived }));
             }
-            
+
             // Fetch sender name
             if (m.senderId && !isMe) {
               try {
@@ -210,7 +320,6 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
                 console.warn("Failed to fetch sender name:", err);
               }
             } else if (isMe) {
-              // For our own messages, we know our name
               try {
                 const { data: me } = await api.get("/api/users/me");
                 senderName = me.displayName || me.username || "You";
@@ -219,7 +328,30 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
               }
             }
           } catch (err) {
-            console.error("❌ Decryption failed:", err);
+            console.error("❌ Decryption with meta.senderPublicKey failed:", err);
+          }
+        }
+
+        // If meta-based decryption failed (or meta missing), try fetching sender's current key
+        if (!text && m.senderId && !isMe) {
+          try {
+            const { data: senderUser } = await api.get(`/api/users/${m.senderId}`);
+            if (senderUser?.ecdhPublicKey) {
+              try {
+                const { aesKey: derived } = await cryptoLib.deriveSharedAESKey(myPriv, senderUser.ecdhPublicKey);
+                text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
+                // Cache
+                const { rawKeyBase64 } = await cryptoLib.deriveSharedAESKey(myPriv, senderUser.ecdhPublicKey);
+                cryptoLib.saveAesKeyForUser(m.senderId, rawKeyBase64);
+                setMemberKeys((prev) => ({ ...prev, [m.senderId]: derived }));
+                senderName = senderUser.displayName || senderUser.username || "Unknown";
+                console.log("✅ Group incoming message decrypted using fetched sender key");
+              } catch (innerErr) {
+                console.warn("⚠️ Decryption using fetched sender key failed:", innerErr);
+              }
+            }
+          } catch (fetchErr) {
+            console.warn("⚠️ Failed to fetch sender's key for incoming message:", fetchErr);
           }
         }
 
@@ -235,7 +367,59 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
     };
 
     socket.on("message", handler);
-    return () => socket.off("message", handler);
+    
+    // Handle send errors from the server
+    const errorHandler = (error) => {
+      console.error("❌ Server rejected message:", error);
+
+      // Handle recipient_no_private_key for group sends: auto-resend unencrypted to that member
+      if (error?.reason === 'recipient_no_private_key' && error?.receiverId) {
+        const rid = String(error.receiverId);
+        const pending = pendingMessagesRef.current[rid];
+        if (pending && pending.tempId) {
+          // Update the pending message in-place (mark unencrypted)
+          setHistory((prev) => prev.map((msg) => {
+            if (msg.tempId && msg.tempId === pending.tempId) {
+              return {
+                ...msg,
+                ciphertext: pending.plaintext,
+                meta: { ...(msg.meta || {}), unencrypted: true },
+                tempId: undefined
+              };
+            }
+            return msg;
+          }));
+
+          // Emit unencrypted message for that member
+          socket.emit('sendMessage', {
+            receiverId: rid,
+            groupId: String(group._id),
+            ciphertext: pending.plaintext,
+            type: 'text',
+            meta: { unencrypted: true }
+          });
+
+          // Clear pending
+          delete pendingMessagesRef.current[rid];
+
+          // Silent resend - no toast (UI shows updated message)
+          return;
+        } else {
+          // No pending entry for that receiver - inform the sender to retry manually
+          toast.error('Recipient cannot decrypt encrypted messages; please resend to that member without encryption.');
+          return;
+        }
+      }
+
+      toast.error(`❌ Message failed: ${error.message || error.reason}`);
+    };
+    
+    socket.on("errorSending", errorHandler);
+    
+    return () => {
+      socket.off("message", handler);
+      socket.off("errorSending", errorHandler);
+    };
   }, [socket, group, myUserId]);
 
   /* ---------- Auto-scroll ---------- */
@@ -248,75 +432,149 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
     if (!text.trim()) return;
 
     try {
-      const myPublicKey = cryptoLib.getLocalPublicKey();
+      // Create a broadcast pending entry so the message appears immediately even before per-member encryption completes
+      const broadcastTempId = `pending:group:${group._id}:${Date.now()}`;
+      pendingMessagesRef.current[`${group._id}:${myUserId}`] = { tempId: broadcastTempId, plaintext: text, ciphertext: null };
+      appendNewMessage({
+        tempId: broadcastTempId,
+        senderId: myUserId,
+        groupId: String(group._id),
+        plaintext: text,
+        ciphertext: text,
+        type: 'text',
+        createdAt: new Date(),
+        isMe: true,
+        senderName: 'You',
+      });
+
+      let myPublicKey = cryptoLib.getLocalPublicKey();
       if (!myPublicKey) {
-        toast.error("⚠️ Missing encryption key. Please log out and log back in.");
+        // Try to obtain our public key from server as a fallback
+        try {
+          const { data: me } = await api.get('/api/users/me');
+          if (me?.ecdhPublicKey) {
+            myPublicKey = me.ecdhPublicKey;
+            console.warn('Using server-stored public key as fallback');
+          }
+        } catch (err) {
+          console.warn('Failed to fetch own public key from server as fallback', err);
+        }
+      }
+
+      if (!myPublicKey) {
+        // Do not block send — fall back to sending a single unencrypted broadcast to the group
+        console.warn('⚠️ No public key available locally; falling back to sending unencrypted group message');
+        const tempId = `pending:group:${group._id}:${Date.now()}`;
+        pendingMessagesRef.current[`${group._id}:${myUserId}`] = { tempId, plaintext: text, ciphertext: text };
+        appendNewMessage({
+          tempId,
+          senderId: myUserId,
+          groupId: String(group._id),
+          plaintext: text,
+          ciphertext: text,
+          type: 'text',
+          createdAt: new Date(),
+          isMe: true,
+          senderName: 'You',
+        });
+
+        socket.emit('sendMessage', {
+          groupId: String(group._id),
+          ciphertext: text,
+          type: 'text',
+          meta: { unencrypted: true }
+        });
+
+        setText('');
         return;
       }
 
       const myPriv = await loadLocalPrivateKey();
       if (!myPriv) {
-        toast.error("⚠️ Missing private key.");
+        // We can't perform per-recipient encryption without the private key — fall back to unencrypted broadcast
+        console.warn('⚠️ No local private key available; falling back to sending unencrypted group message');
+        const tempId2 = `pending:group:${group._id}:${Date.now()}`;
+        pendingMessagesRef.current[`${group._id}:${myUserId}`] = { tempId: tempId2, plaintext: text, ciphertext: text };
+        appendNewMessage({
+          tempId: tempId2,
+          senderId: myUserId,
+          groupId: String(group._id),
+          plaintext: text,
+          ciphertext: text,
+          type: 'text',
+          createdAt: new Date(),
+          isMe: true,
+          senderName: 'You',
+        });
+
+        socket.emit('sendMessage', {
+          groupId: String(group._id),
+          ciphertext: text,
+          type: 'text',
+          meta: { unencrypted: true }
+        });
+
+        setText('');
         return;
       }
 
-      // For group messages, we encrypt using the first member's public key
-      // All members can decrypt using their private key + sender's public key (from meta)
-      // This is a simplified approach - in production, you'd want proper group key management
-      let recipientPublicKey = null;
-      
-      // Find first member that's not us and has a public key
-      if (group.members && group.members.length > 0) {
-        for (const member of group.members) {
-          const memberId = typeof member === 'object' ? member._id : member;
-          if (String(memberId) !== String(myUserId)) {
-            try {
-              const { data: memberUser } = await api.get(`/api/users/${memberId}`);
-              if (memberUser?.ecdhPublicKey) {
-                recipientPublicKey = memberUser.ecdhPublicKey;
-                break;
-              }
-            } catch (err) {
-              console.warn("Failed to fetch member key:", err);
-            }
+      // For group messages we must create a ciphertext per recipient so each member
+      // can decrypt using their private key + senderPublicKey. We loop members,
+      // derive a per-recipient AES key and emit a separate message for each member.
+      if (!group.members || group.members.length === 0) {
+        toast.warning("⚠️ Group has no members to send to.");
+        return;
+      }
+
+      // Fetch all members' public keys and encrypt per-member
+      for (const member of group.members) {
+        const memberId = typeof member === 'object' ? member._id : member;
+        if (!memberId) continue;
+
+        try {
+          const { data: memberUser } = await api.get(`/api/users/${memberId}`);
+          const memberPub = memberUser?.ecdhPublicKey;
+          if (!memberPub) {
+            console.warn(`Skipping member ${memberId} - no public key`);
+            continue;
           }
+
+          const { aesKey } = await cryptoLib.deriveSharedAESKey(myPriv, memberPub);
+          const cForMember = await cryptoLib.encryptWithAesKey(aesKey, text);
+
+          socket.emit("sendMessage", {
+            receiverId: memberId,
+            groupId: String(group._id),
+            ciphertext: cForMember,
+            type: "text",
+            meta: {
+              senderPublicKey: myPublicKey,
+            },
+          });
+
+          // If this copy is for us, append it locally so sender sees immediate send
+          const tempId = `pending:${memberId}:${Date.now()}`;
+          // Save pending per-member so we can handle server-side rejects/resend
+          pendingMessagesRef.current[memberId] = { tempId, plaintext: text, ciphertext: cForMember };
+
+          if (String(memberId) === String(myUserId)) {
+            // Append with tempId so we can update instead of duplicating when server echoes back
+            appendNewMessage({
+              tempId,
+              senderId: myUserId,
+              groupId: String(group._id),
+              plaintext: text,
+              ciphertext: cForMember,
+              type: "text",
+              createdAt: new Date(),
+              isMe: true,
+              senderName: "You",
+            });
+          }
+        } catch (err) {
+          console.warn("Failed to encrypt/send to member:", memberId, err);
         }
       }
-
-      // If no member has a key, we can't encrypt properly
-      // For now, we'll use a placeholder approach
-      if (!recipientPublicKey) {
-        toast.warning("⚠️ No group members have encryption keys yet.");
-        return;
-      }
-
-      // Derive AES key using our private key + first member's public key
-      const { aesKey } = await cryptoLib.deriveSharedAESKey(
-        myPriv,
-        recipientPublicKey
-      );
-      
-      const c = await cryptoLib.encryptWithAesKey(aesKey, text);
-
-      appendNewMessage({
-        senderId: myUserId,
-        groupId: String(group._id),
-        plaintext: text,
-        ciphertext: c,
-        type: "text",
-        createdAt: new Date(),
-        isMe: true,
-        senderName: "You",
-      });
-
-      socket.emit("sendMessage", {
-        groupId: String(group._id),
-        ciphertext: c,
-        type: "text",
-        meta: {
-          senderPublicKey: myPublicKey,
-        },
-      });
 
       setText("");
     } catch (err) {
@@ -370,41 +628,42 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
               senderName: "You",
             });
 
-            const myPublicKey = cryptoLib.getLocalPublicKey();
+            let myPublicKey = cryptoLib.getLocalPublicKey();
             const myPriv = await loadLocalPrivateKey();
+            if (!myPublicKey) {
+              try {
+                const { data: me } = await api.get('/api/users/me');
+                if (me?.ecdhPublicKey) myPublicKey = me.ecdhPublicKey;
+              } catch (err) {
+                console.warn('Failed to fetch own public key for file send fallback', err);
+              }
+            }
+
             if (myPriv && myPublicKey && group.members) {
-              // Find first member with public key for encryption
-              let recipientPublicKey = null;
               for (const member of group.members) {
                 const memberId = typeof member === 'object' ? member._id : member;
-                if (String(memberId) !== String(myUserId)) {
-                  try {
-                    const { data: memberUser } = await api.get(`/api/users/${memberId}`);
-                    if (memberUser?.ecdhPublicKey) {
-                      recipientPublicKey = memberUser.ecdhPublicKey;
-                      break;
-                    }
-                  } catch (err) {
-                    // Continue to next member
-                  }
-                }
-              }
-              
-              if (recipientPublicKey) {
-                const { aesKey } = await cryptoLib.deriveSharedAESKey(
-                  myPriv,
-                  recipientPublicKey
-                );
-                const c = await cryptoLib.encryptWithAesKey(aesKey, `File: ${file.name}`);
+                if (!memberId) continue;
 
-                socket.emit("sendMessage", {
-                  groupId: String(group._id),
-                  ciphertext: c,
-                  type: "text",
-                  meta: {
-                    senderPublicKey: myPublicKey,
-                  },
-                });
+                try {
+                  const { data: memberUser } = await api.get(`/api/users/${memberId}`);
+                  const memberPub = memberUser?.ecdhPublicKey;
+                  if (!memberPub) continue;
+
+                  const { aesKey } = await cryptoLib.deriveSharedAESKey(myPriv, memberPub);
+                  const cForMember = await cryptoLib.encryptWithAesKey(aesKey, `File: ${file.name}`);
+
+                  socket.emit("sendMessage", {
+                    receiverId: memberId,
+                    groupId: String(group._id),
+                    ciphertext: cForMember,
+                    type: "text",
+                    meta: {
+                      senderPublicKey: myPublicKey,
+                    },
+                  });
+                } catch (err) {
+                  console.warn("Failed to encrypt/send file message to member:", memberId, err);
+                }
               }
             }
           }
@@ -528,6 +787,10 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
     </div>
   );
 }
+
+
+
+
 
 
 

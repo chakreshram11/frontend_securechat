@@ -4,33 +4,20 @@
 const curve = "P-256";
 const algoECDH = { name: "ECDH", namedCurve: curve };
 
-// Check if Web Crypto API is available and we're in a secure context
+// Check if Web Crypto API is available - no longer throws errors
+// Returns true if available, false otherwise
 function checkSecureContext() {
-  const isSecure = window.isSecureContext === true;
-  const protocol = window.location.protocol;
-  const hostname = window.location.hostname;
-  
-  if (!window.crypto || !window.crypto.subtle) {
-    console.error("❌ Web Crypto API not available");
-    console.error("   isSecureContext:", isSecure);
-    console.error("   protocol:", protocol);
-    console.error("   hostname:", hostname);
-    
-    if (!isSecure) {
-      const errorMsg = 
-        "Web Crypto API requires a secure context (HTTPS with valid certificate or localhost). " +
-        "Your connection shows HTTPS but is not treated as secure (likely due to invalid/self-signed certificate). " +
-        "Please accept the certificate in your browser or use a valid SSL certificate.";
-      console.error("   Error:", errorMsg);
-      throw new Error(errorMsg);
-    }
-    throw new Error("Web Crypto API is not supported in this browser");
+  if (!window.crypto) {
+    console.warn("⚠️ window.crypto is not available");
+    return false;
   }
   
-  // Log secure context status (for debugging)
-  if (!isSecure) {
-    console.warn("⚠️ Warning: isSecureContext is false even though protocol is", protocol);
-    console.warn("   This may cause Web Crypto API to fail. Check your SSL certificate.");
+  if (!window.crypto.subtle) {
+    console.warn("⚠️ window.crypto.subtle is not available");
+    console.log("   isSecureContext:", window.isSecureContext);
+    console.log("   protocol:", window.location.protocol);
+    console.log("   hostname:", window.location.hostname);
+    return false;
   }
   
   return true;
@@ -57,7 +44,12 @@ export async function testWebCrypto() {
 // 🔹 ECDH key handling
 // --------------------
 export async function generateECDHKeyPair() {
-  checkSecureContext();
+  const hasWebCrypto = checkSecureContext();
+  
+  if (!hasWebCrypto) {
+    console.warn("⚠️ Web Crypto not available - cannot generate ECDH keys");
+    throw new Error("Web Crypto API not available");
+  }
   
   try {
     const pair = await crypto.subtle.generateKey(algoECDH, true, [
@@ -76,6 +68,8 @@ export async function generateECDHKeyPair() {
     return { privB64, pubB64 };
   } catch (err) {
     console.error("❌ Failed to generate ECDH key pair:", err);
+    console.error("   Error name:", err.name);
+    console.error("   Error message:", err.message);
     throw err;
   }
 }
@@ -111,7 +105,11 @@ export async function loadLocalPrivateKey() {
 // 🔹 AES key derivation (ECDH shared secret)
 // --------------------
 export async function deriveSharedAESKey(myPriv, peerPubB64) {
-  checkSecureContext();
+  const hasWebCrypto = checkSecureContext();
+  
+  if (!hasWebCrypto) {
+    throw new Error("Web Crypto API not available - cannot derive AES key");
+  }
   
   if (!peerPubB64 || !myPriv) {
     throw new Error("Missing required parameters for key derivation");
@@ -141,7 +139,6 @@ export async function deriveSharedAESKey(myPriv, peerPubB64) {
     return { aesKey, rawKeyBase64 };
   } catch (err) {
     console.error("❌ Key derivation failed:", err);
-    console.error("   peerPubB64 length:", peerPubB64?.length);
     console.error("   error name:", err.name);
     console.error("   error message:", err.message);
     throw err;
@@ -163,18 +160,33 @@ export function loadAesKeyForUser(userId) {
 }
 
 export async function importAesKeyFromRawBase64(b64) {
-  const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
-  return await crypto.subtle.importKey("raw", raw, "AES-GCM", true, [
-    "encrypt",
-    "decrypt",
-  ]);
+  const hasWebCrypto = checkSecureContext();
+  
+  if (!hasWebCrypto) {
+    throw new Error("Web Crypto API not available for key import");
+  }
+  
+  try {
+    const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+    return await crypto.subtle.importKey("raw", raw, "AES-GCM", true, [
+      "encrypt",
+      "decrypt",
+    ]);
+  } catch (err) {
+    console.error("❌ Failed to import AES key:", err);
+    throw err;
+  }
 }
 
 // --------------------
 // 🔹 AES-GCM encrypt/decrypt
 // --------------------
 export async function encryptWithAesKey(aesKey, plaintext) {
-  checkSecureContext();
+  const hasWebCrypto = checkSecureContext();
+  
+  if (!hasWebCrypto) {
+    throw new Error("Web Crypto API not available for encryption");
+  }
   
   if (!aesKey || !plaintext) {
     throw new Error("Missing AES key or plaintext for encryption");
@@ -183,23 +195,29 @@ export async function encryptWithAesKey(aesKey, plaintext) {
   try {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const enc = new TextEncoder().encode(plaintext);
+    
     const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, enc);
 
     const combined = new Uint8Array(iv.byteLength + cipher.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(cipher), iv.byteLength);
 
-    return btoa(String.fromCharCode(...combined));
+    const b64 = btoa(String.fromCharCode(...combined));
+    
+    console.log("✅ Message encrypted successfully");
+    return b64;
   } catch (err) {
     console.error("❌ Encryption failed:", err);
-    console.error("   error name:", err.name);
-    console.error("   error message:", err.message);
     throw err;
   }
 }
 
 export async function decryptWithAesKey(aesKey, b64Ciphertext) {
-  checkSecureContext();
+  const hasWebCrypto = checkSecureContext();
+  
+  if (!hasWebCrypto) {
+    throw new Error("Web Crypto API not available for decryption");
+  }
   
   if (!aesKey || !b64Ciphertext) {
     throw new Error("Missing AES key or ciphertext for decryption");
@@ -207,23 +225,24 @@ export async function decryptWithAesKey(aesKey, b64Ciphertext) {
   
   try {
     const data = Uint8Array.from(atob(b64Ciphertext), (c) => c.charCodeAt(0));
+    
     if (data.length < 12) {
-      throw new Error("Ciphertext too short (missing IV)");
+      throw new Error(`Ciphertext too short (missing IV): ${data.length} bytes`);
     }
     const iv = data.slice(0, 12);
     const ct = data.slice(12);
     
     if (ct.length === 0) {
-      throw new Error("Ciphertext is empty");
+      throw new Error("Ciphertext is empty after removing IV");
     }
 
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ct);
-    return new TextDecoder().decode(plain);
+    const result = new TextDecoder().decode(plain);
+    
+    console.log("✅ Message decrypted successfully");
+    return result;
   } catch (err) {
     console.error("❌ Decryption failed:", err);
-    console.error("   error name:", err.name);
-    console.error("   error message:", err.message);
-    console.error("   ciphertext length:", b64Ciphertext?.length);
     throw err;
   }
 }

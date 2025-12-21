@@ -20,7 +20,21 @@ export default function AdminPanel() {
 
 /* ---------- SOCKET.IO ---------- */
 useEffect(() => {
-  const socket = io(import.meta.env.VITE_API_BASE || "http://localhost:5000", {
+  // Determine socket server URL (same logic as API client)
+  const getSocketUrl = () => {
+    const envBase = import.meta.env.VITE_API_BASE;
+    if (envBase && envBase.trim()) {
+      return envBase;
+    }
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+      return "http://localhost:5000";
+    }
+    return `${protocol}//${hostname}:5000`;
+  };
+
+  const socket = io(getSocketUrl(), {
     auth: { token: localStorage.getItem("token") },
   });
 
