@@ -47,10 +47,22 @@ useEffect(() => {
     });
   });
 
+  // Also listen for userAdded event for compatibility
+  socket.on("userAdded", (newUser) => {
+    console.log("👤 User added broadcast:", newUser);
+    setUsers((prev) => {
+      if (prev.some((u) => u._id === newUser._id)) return prev;
+      return [...prev, newUser];
+    });
+  });
+
   // ✅ Listen for user deletions
   socket.on("user:deleted", (deletedUser) => {
     console.log("🗑️ User deleted broadcast:", deletedUser);
-    setUsers((prev) => prev.filter((u) => u._id !== deletedUser._id));
+    const deletedUserId = deletedUser._id || deletedUser.id;
+    if (deletedUserId) {
+      setUsers((prev) => prev.filter((u) => u._id !== deletedUserId));
+    }
   });
 
   // ✅ Listen for group updates
@@ -60,6 +72,7 @@ useEffect(() => {
 
   return () => {
     socket.off("user:new");
+    socket.off("userAdded");
     socket.off("user:deleted");
     socket.off("groupAdded");
     socket.off("groupUpdated");
@@ -101,10 +114,11 @@ useEffect(() => {
   setLoading(true);
   try {
     const { data } = await api.post("/api/admin/users", newUser);
-    toast.success(`✅ User "${data.user.username}" added successfully`);
+    toast.success(`✅ User "${data.username}" added successfully`);
     setNewUser({ username: "", password: "", displayName: "", role: "user" });
-    setUsers((prev) => [...prev, data.user]); // optional immediate local add
+    setUsers((prev) => [...prev, data]); // Add the new user to the list
   } catch (err) {
+    console.error("Add user error:", err.response?.data || err.message);
     toast.error(err.response?.data?.error || "❌ Failed to add user");
   } finally {
     setLoading(false);

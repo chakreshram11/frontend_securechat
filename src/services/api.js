@@ -15,7 +15,7 @@ const getApiBase = () => {
   
   // For localhost/127.0.0.1, use localhost:5000
   if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return "http://localhost:5000";
+    return `${protocol}//${hostname}:5000`;
   }
   
   // For other IPs/domains, use the same hostname with port 5000
@@ -101,6 +101,60 @@ api.interceptors.response.use(
 
 export function setToken(token) {
   api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+}
+
+// File upload function
+export async function uploadFile(file) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await api.post('/api/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('File upload failed:', error);
+    throw error;
+  }
+}
+
+// File download function
+export async function downloadFile(fileId) {
+  try {
+    const response = await api.get(`/api/files/${fileId}`, {
+      responseType: 'blob' // Important for file downloads
+    });
+    return response.data;
+  } catch (error) {
+    console.error('File download failed:', error);
+    throw error;
+  }
+}
+
+// File list function
+export async function listFiles() {
+  try {
+    const response = await api.get('/api/files/list');
+    return response.data;
+  } catch (error) {
+    console.error('File list failed:', error);
+    throw error;
+  }
+}
+
+// File delete function
+export async function deleteFile(filename) {
+  try {
+    const response = await api.delete(`/api/files/delete/${filename}`);
+    return response.data;
+  } catch (error) {
+    console.error('File delete failed:', error);
+    throw error;
+  }
 }
 
 export default api;

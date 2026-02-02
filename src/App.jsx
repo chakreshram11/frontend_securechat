@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Login from "./pages/Login";
 import Chat from "./pages/Chat";
+import Settings from "./pages/Settings";
 import { toast } from "react-toastify";
 
 // ✅ Import toastify
@@ -91,7 +92,7 @@ export default function App() {
             { name: "AES-GCM", iv },
             testKey,
             data
-          );
+          ); 
           
           const decrypted = await window.crypto.subtle.decrypt(
             { name: "AES-GCM", iv },
@@ -123,6 +124,20 @@ export default function App() {
     }
   }, [token]);
 
+  const [showSettings, setShowSettings] = useState(false);
+  const [theme, setTheme] = useState('light');
+
+  useEffect(() => {
+    // Load saved theme from localStorage
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    setTheme(savedTheme);
+    document.documentElement.classList.toggle('dark', savedTheme === 'dark');
+  }, []);
+
+  const handleThemeChange = (newTheme) => {
+    setTheme(newTheme);
+  };
+
   return (
     <>
       {/* ✅ Global Toast Notifications */}
@@ -134,7 +149,7 @@ export default function App() {
         closeOnClick
         pauseOnHover
         draggable
-        theme="colored"
+        theme={theme === 'dark' ? 'dark' : 'light'}
       />
 
       {/* ✅ Show Login if no token, else Chat */}
@@ -142,8 +157,20 @@ export default function App() {
         <Login onLogin={(t) => setToken(t)} />
       ) : (
         <div className="h-screen flex flex-col">
-        <Chat token={token} onLogout={() => setToken(null)} />
+          <Chat
+            token={token}
+            onLogout={() => setToken(null)}
+            onSettingsClick={() => setShowSettings(true)}
+          />
         </div>
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+          onThemeChange={handleThemeChange}
+        />
       )}
     </>
   );

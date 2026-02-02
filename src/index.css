@@ -1,4 +1,43 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-body { @apply bg-gray-50 text-gray-800; }
+
+body {
+  @apply bg-gray-50 text-gray-800;
+}
+
+.dark body {
+  @apply bg-gray-900 text-gray-100;
+}
+
+.dark .bg-white {
+  @apply bg-gray-800;
+}
+
+.dark .text-gray-800 {
+  @apply text-gray-100;
+}
+
+.dark .bg-gray-50 {
+  @apply bg-gray-900;
+}
+
+.dark .text-gray-700 {
+  @apply text-gray-200;
+}
+
+.dark .bg-gray-100 {
+  @apply bg-gray-800;
+}
+
+.dark .border-gray-200 {
+  @apply border-gray-700;
+}
+
+.dark .hover:bg-gray-100:hover {
+  @apply hover:bg-gray-700;
+}
+
+.dark .focus:ring-blue-500:focus {
+  @apply focus:ring-blue-400;
+}

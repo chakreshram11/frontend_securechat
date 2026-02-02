@@ -4,23 +4,47 @@ import * as cryptoLib from "../lib/crypto";
 
 // 🔑 Save private key locally
 async function savePrivateKey(privateKey) {
-  const exported = await window.crypto.subtle.exportKey("pkcs8", privateKey);
-  const privB64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
-  localStorage.setItem("ecdhPrivateKey", privB64);
+  // Check if Web Crypto API is available
+  if (!window.crypto || !window.crypto.subtle) {
+    console.warn("⚠️ Web Crypto API not available - cannot save private key");
+    return null;
+  }
+
+  try {
+    const exported = await window.crypto.subtle.exportKey("pkcs8", privateKey);
+    const privB64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
+    localStorage.setItem("ecdhPrivateKey", privB64);
+    return privB64;
+  } catch (err) {
+    console.error("❌ Failed to save private key:", err);
+    return null;
+  }
 }
 
 // 🔑 Load private key if already exists
 async function loadPrivateKey() {
+  // Check if Web Crypto API is available
+  if (!window.crypto || !window.crypto.subtle) {
+    console.warn("⚠️ Web Crypto API not available - cannot load private key");
+    return null;
+  }
+
   const b64 = localStorage.getItem("ecdhPrivateKey");
   if (!b64) return null;
-  const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
-  return window.crypto.subtle.importKey(
-    "pkcs8",
-    raw,
-    { name: "ECDH", namedCurve: "P-256" },
-    true,
-    ["deriveKey", "deriveBits"]
-  );
+
+  try {
+    const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+    return window.crypto.subtle.importKey(
+      "pkcs8",
+      raw,
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      ["deriveKey", "deriveBits"]
+    );
+  } catch (err) {
+    console.error("❌ Failed to load private key:", err);
+    return null;
+  }
 }
 
 export default function Login({ onLogin }) {
@@ -167,13 +191,10 @@ export default function Login({ onLogin }) {
       });
       
       let errorMessage = "Authentication failed";
-      
+
       if (!err.response) {
         // Network error - cannot reach server
-        const hostname = window.location.hostname;
-        const apiBase = hostname === "localhost" || hostname === "127.0.0.1" 
-          ? "http://localhost:5000" 
-          : `http://${hostname}:5000`;
+        const apiBase = import.meta.env.VITE_API_BASE || `${window.location.protocol}//${window.location.hostname}:5000`;
         errorMessage = `❌ Network Error\n\nCannot reach the backend server at:\n${apiBase}\n\nMake sure:\n1. Backend server is running on port 5000\n2. You have internet connectivity\n3. The server address is correct\n\nBackend logs:\n- Check that the server is listening on 0.0.0.0:5000\n- CORS should be enabled\n\nIf the server is running, wait a moment and try again.`;
       } else if (err.response?.status === 400) {
         errorMessage = err.response.data?.error || "Invalid credentials";
@@ -236,7 +257,7 @@ export default function Login({ onLogin }) {
             <p className="text-green-600">✅ Backend connected</p>
           )}
           {connectionStatus === "disconnected" && (
-            <p className="text-red-600 font-semibold">❌ Backend not reachable (http://localhost:5000)</p>
+            <p className="text-red-600 font-semibold">❌ Backend not reachable ({import.meta.env.VITE_API_BASE || 'http://localhost:5000'})</p>
           )}
         </div>
         

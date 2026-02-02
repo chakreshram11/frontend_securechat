@@ -11,7 +11,7 @@ function checkSecureContext() {
     console.warn("⚠️ window.crypto is not available");
     return false;
   }
-  
+
   if (!window.crypto.subtle) {
     console.warn("⚠️ window.crypto.subtle is not available");
     console.log("   isSecureContext:", window.isSecureContext);
@@ -19,7 +19,7 @@ function checkSecureContext() {
     console.log("   hostname:", window.location.hostname);
     return false;
   }
-  
+
   return true;
 }
 
@@ -45,12 +45,12 @@ export async function testWebCrypto() {
 // --------------------
 export async function generateECDHKeyPair() {
   const hasWebCrypto = checkSecureContext();
-  
+
   if (!hasWebCrypto) {
     console.warn("⚠️ Web Crypto not available - cannot generate ECDH keys");
     throw new Error("Web Crypto API not available");
   }
-  
+
   try {
     const pair = await crypto.subtle.generateKey(algoECDH, true, [
       "deriveKey",
@@ -84,10 +84,16 @@ export async function loadLocalPrivateKey() {
     console.log("❌ No private key found in localStorage");
     return null;
   }
-  
+
+  // Check if Web Crypto is available
+  if (!window.crypto || !window.crypto.subtle) {
+    console.warn("⚠️ Web Crypto not available - cannot load private key");
+    return null;
+  }
+
   try {
     const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
-    const key = await crypto.subtle.importKey("pkcs8", raw, algoECDH, true, [
+    const key = await window.crypto.subtle.importKey("pkcs8", raw, algoECDH, true, [
       "deriveKey",
       "deriveBits",
     ]);
@@ -106,15 +112,15 @@ export async function loadLocalPrivateKey() {
 // --------------------
 export async function deriveSharedAESKey(myPriv, peerPubB64) {
   const hasWebCrypto = checkSecureContext();
-  
+
   if (!hasWebCrypto) {
     throw new Error("Web Crypto API not available - cannot derive AES key");
   }
-  
+
   if (!peerPubB64 || !myPriv) {
     throw new Error("Missing required parameters for key derivation");
   }
-  
+
   try {
     const peerRaw = Uint8Array.from(atob(peerPubB64), (c) => c.charCodeAt(0)).buffer;
     const peerKey = await crypto.subtle.importKey(
@@ -161,11 +167,11 @@ export function loadAesKeyForUser(userId) {
 
 export async function importAesKeyFromRawBase64(b64) {
   const hasWebCrypto = checkSecureContext();
-  
+
   if (!hasWebCrypto) {
     throw new Error("Web Crypto API not available for key import");
   }
-  
+
   try {
     const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
     return await crypto.subtle.importKey("raw", raw, "AES-GCM", true, [
@@ -183,19 +189,19 @@ export async function importAesKeyFromRawBase64(b64) {
 // --------------------
 export async function encryptWithAesKey(aesKey, plaintext) {
   const hasWebCrypto = checkSecureContext();
-  
+
   if (!hasWebCrypto) {
     throw new Error("Web Crypto API not available for encryption");
   }
-  
+
   if (!aesKey || !plaintext) {
     throw new Error("Missing AES key or plaintext for encryption");
   }
-  
+
   try {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const enc = new TextEncoder().encode(plaintext);
-    
+
     const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, enc);
 
     const combined = new Uint8Array(iv.byteLength + cipher.byteLength);
@@ -203,7 +209,7 @@ export async function encryptWithAesKey(aesKey, plaintext) {
     combined.set(new Uint8Array(cipher), iv.byteLength);
 
     const b64 = btoa(String.fromCharCode(...combined));
-    
+
     console.log("✅ Message encrypted successfully");
     return b64;
   } catch (err) {
@@ -214,31 +220,31 @@ export async function encryptWithAesKey(aesKey, plaintext) {
 
 export async function decryptWithAesKey(aesKey, b64Ciphertext) {
   const hasWebCrypto = checkSecureContext();
-  
+
   if (!hasWebCrypto) {
     throw new Error("Web Crypto API not available for decryption");
   }
-  
+
   if (!aesKey || !b64Ciphertext) {
     throw new Error("Missing AES key or ciphertext for decryption");
   }
-  
+
   try {
     const data = Uint8Array.from(atob(b64Ciphertext), (c) => c.charCodeAt(0));
-    
+
     if (data.length < 12) {
       throw new Error(`Ciphertext too short (missing IV): ${data.length} bytes`);
     }
     const iv = data.slice(0, 12);
     const ct = data.slice(12);
-    
+
     if (ct.length === 0) {
       throw new Error("Ciphertext is empty after removing IV");
     }
 
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ct);
     const result = new TextDecoder().decode(plain);
-    
+
     console.log("✅ Message decrypted successfully");
     return result;
   } catch (err) {
