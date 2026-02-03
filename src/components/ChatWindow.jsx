@@ -43,7 +43,7 @@ export async function loadLocalPrivateKey() {
   }
 }
 
-export default function ChatWindow({ other, socket, myUserId }) {
+export default function ChatWindow({ other, socket, myUserId, currentUser }) {
   const [history, setHistory] = useState([]);
   const [text, setText] = useState("");
   const [aesKey, setAesKey] = useState(null);
@@ -398,7 +398,10 @@ export default function ChatWindow({ other, socket, myUserId }) {
               console.warn("⚠️ Could not decrypt my own message - recipient's key may have changed");
             }
 
-            // All strategies failed
+            // All strategies failed - clear stale cached key so next attempt uses fresh derivation
+            if (m.senderId) {
+              cryptoLib.clearAesKeyForUser(m.senderId);
+            }
             console.error("❌ All decryption attempts failed for message:", {
               id: m._id || m.id,
               senderId: m.senderId,
@@ -991,39 +994,41 @@ export default function ChatWindow({ other, socket, myUserId }) {
       {/* Header */}
       <div className="border-b p-3 font-semibold bg-gray-100 flex justify-between items-center">
         <span>{other.displayName || other.username}</span>
-        {/* Regenerate keys (always visible; disabled when Web Crypto unavailable) */}
-        <button
-          className={`text-sm mr-3 ${window.crypto && window.crypto.subtle ? 'text-gray-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
-          onClick={async () => {
-            if (!(window.crypto && window.crypto.subtle)) {
-              toast.info(
-                '🔒 Web Crypto not available here. To generate keys, use a secure context (HTTPS or localhost) or regenerate on another device and upload the public key.',
-                { autoClose: 6000 }
-              );
-              return;
-            }
-
-            try {
-              const { privB64, pubB64 } = await generateECDHKeyPair();
-              await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
-              toast.success('🔑 Keys regenerated and uploaded', { autoClose: 3000 });
-              console.log('✅ Keys regenerated and uploaded');
-              // Notify server of new capability
-              try {
-                socket && socket.emit('capabilities', { hasPrivateKey: true, hasWebCrypto: !!(window.crypto && window.crypto.subtle) });
-                console.log('⚙️ Capabilities updated (hasPrivateKey=true)');
-              } catch (e) {
-                console.warn('⚠️ Failed to emit capabilities after regenerate:', e.message);
+        {/* Regenerate keys (admin only; disabled when Web Crypto unavailable) */}
+        {currentUser?.role === 'admin' && (
+          <button
+            className={`text-sm mr-3 ${window.crypto && window.crypto.subtle ? 'text-gray-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
+            onClick={async () => {
+              if (!(window.crypto && window.crypto.subtle)) {
+                toast.info(
+                  '🔒 Web Crypto not available here. To generate keys, use a secure context (HTTPS or localhost) or regenerate on another device and upload the public key.',
+                  { autoClose: 6000 }
+                );
+                return;
               }
-            } catch (err) {
-              console.error('❌ Regenerate keys failed:', err);
-              toast.error('⚠️ Failed to regenerate keys. See console for details.', { autoClose: 4000 });
-            }
-          }}
-          title={window.crypto && window.crypto.subtle ? 'Regenerate encryption keys' : 'Web Crypto not available on this page'}
-        >
-          🔑 Regenerate
-        </button>
+
+              try {
+                const { privB64, pubB64 } = await generateECDHKeyPair();
+                await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
+                toast.success('🔑 Keys regenerated and uploaded', { autoClose: 3000 });
+                console.log('✅ Keys regenerated and uploaded');
+                // Notify server of new capability
+                try {
+                  socket && socket.emit('capabilities', { hasPrivateKey: true, hasWebCrypto: !!(window.crypto && window.crypto.subtle) });
+                  console.log('⚙️ Capabilities updated (hasPrivateKey=true)');
+                } catch (e) {
+                  console.warn('⚠️ Failed to emit capabilities after regenerate:', e.message);
+                }
+              } catch (err) {
+                console.error('❌ Regenerate keys failed:', err);
+                toast.error('⚠️ Failed to regenerate keys. See console for details.', { autoClose: 4000 });
+              }
+            }}
+            title={window.crypto && window.crypto.subtle ? 'Regenerate encryption keys' : 'Web Crypto not available on this page'}
+          >
+            🔑 Regenerate
+          </button>
+        )}
 
         <button
           className="text-blue-600 hover:underline"

@@ -22,24 +22,6 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
   const [systemMessages, setSystemMessages] = useState([]); // ✅ For optional welcome messages
   const socketRef = useRef();
 
-  // Refs to track current selection (fixes stale closure in socket handlers)
-  const selectedUserRef = useRef(null);
-  const selectedGroupRef = useRef(null);
-  const currentUserRef = useRef(null);
-
-  // Keep refs in sync with state
-  useEffect(() => {
-    selectedUserRef.current = selectedUser;
-  }, [selectedUser]);
-
-  useEffect(() => {
-    selectedGroupRef.current = selectedGroup;
-  }, [selectedGroup]);
-
-  useEffect(() => {
-    currentUserRef.current = currentUser;
-  }, [currentUser]);
-
   // Unread message counts: separate maps for direct user chats and groups
   const [unreadUsers, setUnreadUsers] = useState({}); // userId -> count
   const [unreadGroups, setUnreadGroups] = useState({}); // groupId -> count
@@ -209,76 +191,66 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
     };
 
     const onMessage = (msg) => {
-      try {
-        // System messages -> toast immediately
-        if (msg?.type === "system") {
-          console.log("💬 System message:", msg.ciphertext);
-          toast.info(`💬 ${msg.ciphertext}`, {
-            toastId: msg._id || `system-${(msg.createdAt || Date.now())}`,
-            position: "top-right",
-            autoClose: 5000,
-          });
-          return;
+      // System messages -> toast immediately
+      if (msg?.type === "system") {
+        console.log("💬 System message:", msg.ciphertext);
+        toast.info(`💬 ${msg.ciphertext}`, {
+          toastId: msg._id || `system-${(msg.createdAt || Date.now())}`,
+          position: "top-right",
+          autoClose: 5000,
+        });
+        return;
+      }
+
+      // Ignore malformed messages
+      if (!msg) return;
+
+      // Normalize id
+      msg._id = msg._id || msg.id;
+
+      const isGroup = !!msg.groupId;
+      const senderIsMe = String(msg.senderId) === String(currentUser?._id);
+
+      // Only consider incoming messages (not ones we sent)
+      if (senderIsMe) return;
+
+      // Helper to show browser notification (if permission granted)
+      const showBrowserNotification = (title, body) => {
+        try {
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification(title, { body });
+          }
+        } catch (err) {
+          console.warn('Failed to show browser notification:', err.message);
         }
+      };
 
-        // Ignore malformed messages
-        if (!msg) return;
+      // Compose a user-friendly body: prefer plaintext when message is unencrypted or ciphertext short
+      const readableBody = (m) => {
+        if (!m) return 'New message';
+        if (m.meta?.unencrypted) return m.ciphertext;
+        if (m.ciphertext && m.ciphertext.length < 29) return m.ciphertext;
+        return 'Encrypted message';
+      };
 
-        // Normalize id
-        msg._id = msg._id || msg.id;
-
-        const isGroup = !!msg.groupId;
-        // Use ref to get current user (avoids stale closure)
-        const senderIsMe = String(msg.senderId) === String(currentUserRef.current?._id);
-
-        // Only consider incoming messages (not ones we sent)
-        if (senderIsMe) return;
-
-        // Helper to show browser notification (if permission granted)
-        const showBrowserNotification = (title, body) => {
-          try {
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(title, { body });
-            }
-          } catch (err) {
-            console.warn('Failed to show browser notification:', err.message);
-          }
-        };
-
-        // Compose a user-friendly body: prefer plaintext when message is unencrypted or ciphertext short
-        const readableBody = (m) => {
-          if (!m) return 'New message';
-          if (m.meta?.unencrypted) return m.ciphertext;
-          if (m.ciphertext && m.ciphertext.length < 29) return m.ciphertext;
-          return 'Encrypted message';
-        };
-
-        if (isGroup) {
-          // Group message
-          const gid = String(msg.groupId);
-          // Use ref to get current selected group (avoids stale closure)
-          const currentSelectedGroup = selectedGroupRef.current;
-          const isActiveGroup = currentSelectedGroup && String(currentSelectedGroup._id) === gid && document.visibilityState === 'visible';
-          if (!isActiveGroup) {
-            incrementUnreadGroup(gid);
-            const group = groups.find((g) => String(g._id) === gid);
-            showBrowserNotification(group ? `Group: ${group.name}` : 'Group message', readableBody(msg));
-          }
-        } else if (msg.receiverId) {
-          // Direct message: incoming when senderId !== me
-          const sid = String(msg.senderId);
-          // Use ref to get current selected user (avoids stale closure)
-          const currentSelectedUser = selectedUserRef.current;
-          const isActiveUser = currentSelectedUser && String(currentSelectedUser._id) === sid && document.visibilityState === 'visible';
-          if (!isActiveUser) {
-            incrementUnreadUser(sid);
-            const user = users.find((u) => String(u._id) === sid);
-            showBrowserNotification(user ? (user.displayName || user.username) : 'New message', readableBody(msg));
-          }
+      if (isGroup) {
+        // Group message
+        const gid = String(msg.groupId);
+        const isActiveGroup = selectedGroup && String(selectedGroup._id) === gid && document.visibilityState === 'visible';
+        if (!isActiveGroup) {
+          incrementUnreadGroup(gid);
+          const group = groups.find((g) => String(g._id) === gid);
+          showBrowserNotification(group ? `Group: ${group.name}` : 'Group message', readableBody(msg));
         }
-      } catch (err) {
-        console.error("❌ Error in onMessage handler:", err);
-        // Don't let errors break the notification flow
+      } else if (msg.receiverId) {
+        // Direct message: incoming when senderId !== me
+        const sid = String(msg.senderId);
+        const isActiveUser = selectedUser && String(selectedUser._id) === sid && document.visibilityState === 'visible';
+        if (!isActiveUser) {
+          incrementUnreadUser(sid);
+          const user = users.find((u) => String(u._id) === sid);
+          showBrowserNotification(user ? (user.displayName || user.username) : 'New message', readableBody(msg));
+        }
       }
     };
 
@@ -417,150 +389,144 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
     <div className="min-h-screen flex">
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 bg-white w-72 border-r z-40 transform transition-transform lg:relative lg:translate-x-0 flex flex-col ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        className={`fixed inset-y-0 left-0 bg-white w-72 border-r p-4 z-40 transform transition-transform lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
       >
-        {/* Scrollable List Area */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <h3 className="font-bold mb-3">Users</h3>
-          <div className="space-y-2 mb-6">
-            {users.map((u) => {
-              const isOnline = onlineUsers.includes(u._id);
-              const isMe = currentUser?._id === u._id;
+        <h3 className="font-bold mb-3">Users</h3>
+        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
+          {users.map((u) => {
+            const isOnline = onlineUsers.includes(u._id);
+            const isMe = currentUser?._id === u._id;
 
-              return (
-                <div
-                  key={u._id}
-                  className={`p-2 border rounded transition-all ${isMe
+            return (
+              <div
+                key={u._id}
+                className={`p-2 border rounded transition-all ${isMe
                     ? "bg-blue-50 border-blue-300" // 👤 highlight current user
                     : selectedUser?._id === u._id
                       ? "bg-gray-100"
                       : "hover:bg-gray-50 cursor-pointer"
-                    }`}
-                  onClick={() => {
-                    if (!isMe) {
-                      setSelectedUser(u);
-                      setSelectedGroup(null);
-                      setShowAdminPanel(false);
-                      setSidebarOpen(false);
-                      // Clear unread for this user and notify server
-                      clearUnreadUser(u._id);
-                    }
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold flex items-center gap-1">
-                      {u.displayName || u.username}
-                      {isMe && (
-                        <span className="text-xs text-blue-600 font-medium">(You)</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-3 w-3 rounded-full ${isOnline ? "bg-green-500" : "bg-gray-400"
-                          }`}
-                        title={isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
-                      ></span>
-                      {unreadUsers[u._id] > 0 && (
-                        <span className="bg-red-500 text-white text-xs rounded-full px-2">
-                          {unreadUsers[u._id] > 99 ? '99+' : unreadUsers[u._id]}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    className={`text-xs ${isOnline ? "text-green-600" : "text-gray-500"
-                      } mt-0.5`}
-                  >
-                    {isOnline ? "🟢 Online" : formatLastSeen(lastSeen[u._id])}
-                  </div>
-                </div>
-              );
-            })}
-
-          </div>
-
-          {/* Groups Section */}
-          <h3 className="font-bold mb-3">Groups</h3>
-          <div className="space-y-2 mb-4">
-            {groups.length === 0 ? (
-              <div className="text-sm text-gray-500 p-2">No groups yet</div>
-            ) : (
-              groups.map((g) => (
-                <div
-                  key={g._id}
-                  className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
-                    ? "bg-blue-100 border-blue-300"
-                    : "hover:bg-gray-50"
-                    }`}
-                  onClick={() => {
-                    setSelectedGroup(g);
-                    setSelectedUser(null);
+                  }`}
+                onClick={() => {
+                  if (!isMe) {
+                    setSelectedUser(u);
+                    setSelectedGroup(null);
                     setShowAdminPanel(false);
                     setSidebarOpen(false);
-                    // Clear unread for this group and notify server
-                    clearUnreadGroup(g._id);
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold">👥 {g.name}</div>
-                    {unreadGroups[g._id] > 0 && (
-                      <div className="bg-red-500 text-white text-xs rounded-full px-2">
-                        {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">
-                    {g.members?.length || 0} members
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Fixed Bottom Section */}
-        <div className="p-4 border-t bg-white">
-          {/* ✅ Admin-only panel access */}
-          {currentUser?.role === "admin" && (
-            <div className="mb-2">
-              <button
-                className="bg-green-600 text-white px-3 py-2 rounded w-full"
-                onClick={() => {
-                  setShowAdminPanel(true);
-                  setSelectedUser(null);
-                  setSelectedGroup(null);
-                  setSidebarOpen(false);
+                    // Clear unread for this user and notify server
+                    clearUnreadUser(u._id);
+                  }
                 }}
               >
-                Open Admin Panel
-              </button>
-            </div>
-          )}
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold flex items-center gap-1">
+                    {u.displayName || u.username}
+                    {isMe && (
+                      <span className="text-xs text-blue-600 font-medium">(You)</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-3 w-3 rounded-full ${isOnline ? "bg-green-500" : "bg-gray-400"
+                        }`}
+                      title={isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
+                    ></span>
+                    {unreadUsers[u._id] > 0 && (
+                      <span className="bg-red-500 text-white text-xs rounded-full px-2">
+                        {unreadUsers[u._id] > 99 ? '99+' : unreadUsers[u._id]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div
+                  className={`text-xs ${isOnline ? "text-green-600" : "text-gray-500"
+                    } mt-0.5`}
+                >
+                  {isOnline ? "🟢 Online" : formatLastSeen(lastSeen[u._id])}
+                </div>
+              </div>
+            );
+          })}
 
-          {/* Settings */}
-          <div className="mb-2">
+        </div>
+
+        {/* Groups Section */}
+        <h3 className="font-bold mb-3 mt-4">Groups</h3>
+        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
+          {groups.length === 0 ? (
+            <div className="text-sm text-gray-500 p-2">No groups yet</div>
+          ) : (
+            groups.map((g) => (
+              <div
+                key={g._id}
+                className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
+                    ? "bg-blue-100 border-blue-300"
+                    : "hover:bg-gray-50"
+                  }`}
+                onClick={() => {
+                  setSelectedGroup(g);
+                  setSelectedUser(null);
+                  setShowAdminPanel(false);
+                  setSidebarOpen(false);
+                  // Clear unread for this group and notify server
+                  clearUnreadGroup(g._id);
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold">👥 {g.name}</div>
+                  {unreadGroups[g._id] > 0 && (
+                    <div className="bg-red-500 text-white text-xs rounded-full px-2">
+                      {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
+                    </div>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {g.members?.length || 0} members
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* ✅ Admin-only panel access */}
+        {currentUser?.role === "admin" && (
+          <div className="mt-4">
             <button
-              className="bg-blue-600 text-white px-3 py-2 rounded w-full flex items-center justify-center gap-2"
+              className="bg-green-600 text-white px-3 py-2 rounded w-full"
               onClick={() => {
-                onSettingsClick();
+                setShowAdminPanel(true);
+                setSelectedUser(null);
+                setSelectedGroup(null);
                 setSidebarOpen(false);
               }}
             >
-              <Settings size={18} />
-              Settings
+              Open Admin Panel
             </button>
           </div>
+        )}
 
-          {/* Logout */}
-          <div>
-            <button
-              className="bg-red-500 text-white px-3 py-2 rounded w-full"
-              onClick={handleLogout}
-            >
-              Logout
-            </button>
-          </div>
+        {/* Settings */}
+        <div className="mt-4">
+          <button
+            className="bg-blue-600 text-white px-3 py-2 rounded w-full flex items-center justify-center gap-2"
+            onClick={() => {
+              onSettingsClick();
+              setSidebarOpen(false);
+            }}
+          >
+            <Settings size={18} />
+            Settings
+          </button>
+        </div>
+
+        {/* Logout */}
+        <div className="mt-4">
+          <button
+            className="bg-red-500 text-white px-3 py-2 rounded w-full"
+            onClick={handleLogout}
+          >
+            Logout
+          </button>
         </div>
       </aside>
 
@@ -613,6 +579,7 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
             other={selectedUser}
             socket={socketRef.current}
             myUserId={currentUser?._id}
+            currentUser={currentUser}
           />
         ) : (
           <div className="text-gray-500">Select a user or group to chat</div>

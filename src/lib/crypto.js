@@ -165,6 +165,13 @@ export function loadAesKeyForUser(userId) {
   return all[userId];
 }
 
+export function clearAesKeyForUser(userId) {
+  const all = JSON.parse(localStorage.getItem("aesKeys") || "{}");
+  delete all[userId];
+  localStorage.setItem("aesKeys", JSON.stringify(all));
+  console.log(`🗑️ Cleared cached AES key for user ${userId}`);
+}
+
 export async function importAesKeyFromRawBase64(b64) {
   const hasWebCrypto = checkSecureContext();
 
