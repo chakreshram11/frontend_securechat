@@ -4,6 +4,7 @@ import api, { setToken } from "../services/api";
 import io from "socket.io-client";
 import ChatWindow from "../components/ChatWindow";
 import GroupChatWindow from "../components/GroupChatWindow";
+import NotificationBell from "../components/NotificationBell";
 import AdminPanel from "../pages/AdminPanel";
 import { Menu, Settings } from "lucide-react";
 import { toast } from "react-toastify";
@@ -402,10 +403,10 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
               <div
                 key={u._id}
                 className={`p-2 border rounded transition-all ${isMe
-                    ? "bg-blue-50 border-blue-300" // 👤 highlight current user
-                    : selectedUser?._id === u._id
-                      ? "bg-gray-100"
-                      : "hover:bg-gray-50 cursor-pointer"
+                  ? "bg-blue-50 border-blue-300" // 👤 highlight current user
+                  : selectedUser?._id === u._id
+                    ? "bg-gray-100"
+                    : "hover:bg-gray-50 cursor-pointer"
                   }`}
                 onClick={() => {
                   if (!isMe) {
@@ -460,8 +461,8 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
               <div
                 key={g._id}
                 className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
-                    ? "bg-blue-100 border-blue-300"
-                    : "hover:bg-gray-50"
+                  ? "bg-blue-100 border-blue-300"
+                  : "hover:bg-gray-50"
                   }`}
                 onClick={() => {
                   setSelectedGroup(g);
@@ -506,9 +507,12 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
         )}
 
         {/* Settings */}
-        <div className="mt-4">
+        <div className="mt-4 flex items-center gap-2">
+          <div className="hidden lg:block">
+            <NotificationBell socket={socketRef.current} />
+          </div>
           <button
-            className="bg-blue-600 text-white px-3 py-2 rounded w-full flex items-center justify-center gap-2"
+            className="bg-blue-600 text-white px-3 py-2 rounded flex-1 flex items-center justify-center gap-2"
             onClick={() => {
               onSettingsClick();
               setSidebarOpen(false);
@@ -539,12 +543,15 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
           <Menu size={24} />
         </button>
         <h2 className="font-bold">Secure Chat</h2>
-        <button
-          className="p-2 rounded hover:bg-gray-100"
-          onClick={onSettingsClick}
-        >
-          <Settings size={24} />
-        </button>
+        <div className="flex items-center gap-2">
+          <NotificationBell socket={socketRef.current} />
+          <button
+            className="p-2 rounded hover:bg-gray-100"
+            onClick={onSettingsClick}
+          >
+            <Settings size={24} />
+          </button>
+        </div>
       </div>
 
       {/* Overlay for mobile sidebar */}
