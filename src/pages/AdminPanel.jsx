@@ -18,68 +18,72 @@ export default function AdminPanel() {
   const [newGroup, setNewGroup] = useState({ name: "", members: [] });
   const [editingGroup, setEditingGroup] = useState(null);
 
-/* ---------- SOCKET.IO ---------- */
-useEffect(() => {
-  // Determine socket server URL (same logic as API client)
-  const getSocketUrl = () => {
-    const envBase = import.meta.env.VITE_API_BASE;
-    if (envBase && envBase.trim()) {
-      return envBase;
-    }
-    const hostname = window.location.hostname;
-    const protocol = window.location.protocol;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return "http://localhost:5000";
-    }
-    return `${protocol}//${hostname}:5000`;
-  };
+  // Password reset modal state
+  const [resetPasswordUser, setResetPasswordUser] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
 
-  const socket = io(getSocketUrl(), {
-    auth: { token: localStorage.getItem("token") },
-  });
+  /* ---------- SOCKET.IO ---------- */
+  useEffect(() => {
+    // Determine socket server URL (same logic as API client)
+    const getSocketUrl = () => {
+      const envBase = import.meta.env.VITE_API_BASE;
+      if (envBase && envBase.trim()) {
+        return envBase;
+      }
+      const hostname = window.location.hostname;
+      const protocol = window.location.protocol;
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return "http://localhost:5000";
+      }
+      return `${protocol}//${hostname}:5000`;
+    };
 
-  // ✅ Listen for new users (from any admin or registration)
-  socket.on("user:new", (newUser) => {
-    console.log("👤 New user broadcast:", newUser);
-    setUsers((prev) => {
-      if (prev.some((u) => u._id === newUser._id)) return prev;
-      return [...prev, newUser];
+    const socket = io(getSocketUrl(), {
+      auth: { token: localStorage.getItem("token") },
     });
-  });
 
-  // Also listen for userAdded event for compatibility
-  socket.on("userAdded", (newUser) => {
-    console.log("👤 User added broadcast:", newUser);
-    setUsers((prev) => {
-      if (prev.some((u) => u._id === newUser._id)) return prev;
-      return [...prev, newUser];
+    // ✅ Listen for new users (from any admin or registration)
+    socket.on("user:new", (newUser) => {
+      console.log("👤 New user broadcast:", newUser);
+      setUsers((prev) => {
+        if (prev.some((u) => u._id === newUser._id)) return prev;
+        return [...prev, newUser];
+      });
     });
-  });
 
-  // ✅ Listen for user deletions
-  socket.on("user:deleted", (deletedUser) => {
-    console.log("🗑️ User deleted broadcast:", deletedUser);
-    const deletedUserId = deletedUser._id || deletedUser.id;
-    if (deletedUserId) {
-      setUsers((prev) => prev.filter((u) => u._id !== deletedUserId));
-    }
-  });
+    // Also listen for userAdded event for compatibility
+    socket.on("userAdded", (newUser) => {
+      console.log("👤 User added broadcast:", newUser);
+      setUsers((prev) => {
+        if (prev.some((u) => u._id === newUser._id)) return prev;
+        return [...prev, newUser];
+      });
+    });
 
-  // ✅ Listen for group updates
-  socket.on("groupAdded", () => loadGroups());
-  socket.on("groupUpdated", () => loadGroups());
-  socket.on("groupDeleted", () => loadGroups());
+    // ✅ Listen for user deletions
+    socket.on("user:deleted", (deletedUser) => {
+      console.log("🗑️ User deleted broadcast:", deletedUser);
+      const deletedUserId = deletedUser._id || deletedUser.id;
+      if (deletedUserId) {
+        setUsers((prev) => prev.filter((u) => u._id !== deletedUserId));
+      }
+    });
 
-  return () => {
-    socket.off("user:new");
-    socket.off("userAdded");
-    socket.off("user:deleted");
-    socket.off("groupAdded");
-    socket.off("groupUpdated");
-    socket.off("groupDeleted");
-    socket.disconnect();
-  };
-}, []);
+    // ✅ Listen for group updates
+    socket.on("groupAdded", () => loadGroups());
+    socket.on("groupUpdated", () => loadGroups());
+    socket.on("groupDeleted", () => loadGroups());
+
+    return () => {
+      socket.off("user:new");
+      socket.off("userAdded");
+      socket.off("user:deleted");
+      socket.off("groupAdded");
+      socket.off("groupUpdated");
+      socket.off("groupDeleted");
+      socket.disconnect();
+    };
+  }, []);
 
 
   /* ---------- LOAD DATA ---------- */
@@ -108,36 +112,36 @@ useEffect(() => {
 
   /* ---------- USER FUNCTIONS ---------- */
   async function addUser() {
-  if (!newUser.username || !newUser.password) {
-    return toast.warning("⚠️ Username & Password required");
+    if (!newUser.username || !newUser.password) {
+      return toast.warning("⚠️ Username & Password required");
+    }
+    setLoading(true);
+    try {
+      const { data } = await api.post("/api/admin/users", newUser);
+      toast.success(`✅ User "${data.username}" added successfully`);
+      setNewUser({ username: "", password: "", displayName: "", role: "user" });
+      setUsers((prev) => [...prev, data]); // Add the new user to the list
+    } catch (err) {
+      console.error("Add user error:", err.response?.data || err.message);
+      toast.error(err.response?.data?.error || "❌ Failed to add user");
+    } finally {
+      setLoading(false);
+    }
   }
-  setLoading(true);
-  try {
-    const { data } = await api.post("/api/admin/users", newUser);
-    toast.success(`✅ User "${data.username}" added successfully`);
-    setNewUser({ username: "", password: "", displayName: "", role: "user" });
-    setUsers((prev) => [...prev, data]); // Add the new user to the list
-  } catch (err) {
-    console.error("Add user error:", err.response?.data || err.message);
-    toast.error(err.response?.data?.error || "❌ Failed to add user");
-  } finally {
-    setLoading(false);
-  }
-}
 
 
-async function deleteUser(id) {
-  if (!window.confirm("Delete this user?")) return;
-  try {
-    await api.delete(`/api/admin/users/${id}`);
-    toast.success("🗑️ User deleted");
+  async function deleteUser(id) {
+    if (!window.confirm("Delete this user?")) return;
+    try {
+      await api.delete(`/api/admin/users/${id}`);
+      toast.success("🗑️ User deleted");
 
-    // ✅ Immediately reflect deletion locally
-    setUsers((prev) => prev.filter((u) => u._id !== id));
-  } catch (err) {
-    toast.error("❌ Failed to delete user");
+      // ✅ Immediately reflect deletion locally
+      setUsers((prev) => prev.filter((u) => u._id !== id));
+    } catch (err) {
+      toast.error("❌ Failed to delete user");
+    }
   }
-}
 
 
   async function toggleUserRole(id, currentRole) {
@@ -148,6 +152,27 @@ async function deleteUser(id) {
       loadUsers();
     } catch {
       toast.error("❌ Failed to update role");
+    }
+  }
+
+  async function resetUserPassword() {
+    if (!resetPasswordUser || !newPassword) {
+      toast.warning("⚠️ Please enter a new password");
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast.warning("⚠️ Password must be at least 6 characters");
+      return;
+    }
+    try {
+      await api.post(`/api/admin/users/${resetPasswordUser._id}/reset-password`, {
+        newPassword
+      });
+      toast.success(`✅ Password reset for ${resetPasswordUser.displayName || resetPasswordUser.username}`);
+      setResetPasswordUser(null);
+      setNewPassword("");
+    } catch (err) {
+      toast.error(err.response?.data?.error || "❌ Failed to reset password");
     }
   }
 
@@ -179,12 +204,12 @@ async function deleteUser(id) {
     if (!editingGroup) return;
     try {
       // Ensure members are properly formatted as an array of IDs (strings)
-      const membersToSend = Array.isArray(editingGroup.members) 
-        ? editingGroup.members.map(m => 
-            typeof m === 'object' && m._id ? String(m._id) : String(m)
-          )
+      const membersToSend = Array.isArray(editingGroup.members)
+        ? editingGroup.members.map(m =>
+          typeof m === 'object' && m._id ? String(m._id) : String(m)
+        )
         : [];
-      
+
       await api.put(`/api/admin/groups/${editingGroup._id}`, {
         name: editingGroup.name,
         members: membersToSend,
@@ -224,11 +249,10 @@ async function deleteUser(id) {
                 <div>
                   <span className="font-medium">{u.displayName || u.username}</span>
                   <span
-                    className={`ml-2 px-2 py-1 text-xs rounded-full ${
-                      u.role === "admin"
+                    className={`ml-2 px-2 py-1 text-xs rounded-full ${u.role === "admin"
                         ? "bg-green-100 text-green-700"
                         : "bg-blue-100 text-blue-700"
-                    }`}
+                      }`}
                   >
                     {u.role}
                   </span>
@@ -239,6 +263,12 @@ async function deleteUser(id) {
                     className="px-3 py-1 text-xs sm:text-sm bg-yellow-500 text-white rounded hover:bg-yellow-600"
                   >
                     Toggle Role
+                  </button>
+                  <button
+                    onClick={() => setResetPasswordUser(u)}
+                    className="px-3 py-1 text-xs sm:text-sm bg-purple-500 text-white rounded hover:bg-purple-600"
+                  >
+                    Reset Password
                   </button>
                   <button
                     onClick={() => deleteUser(u._id)}
@@ -293,11 +323,10 @@ async function deleteUser(id) {
               <button
                 onClick={addUser}
                 disabled={loading}
-                className={`sm:col-span-2 mt-2 px-4 py-2 rounded text-white ${
-                  loading
+                className={`sm:col-span-2 mt-2 px-4 py-2 rounded text-white ${loading
                     ? "bg-gray-400 cursor-not-allowed"
                     : "bg-green-600 hover:bg-green-700"
-                }`}
+                  }`}
               >
                 {loading ? "Adding..." : "Add User"}
               </button>
@@ -326,7 +355,7 @@ async function deleteUser(id) {
                       }
                       placeholder="Group Name"
                     />
-                    
+
                     {/* Current Members */}
                     <div className="mb-3">
                       <h4 className="text-sm font-semibold mb-2">Current Members:</h4>
@@ -405,10 +434,10 @@ async function deleteUser(id) {
                               (m) => String(m) === String(u._id)
                             )
                         ).length === 0 && (
-                          <div className="text-xs text-gray-500 text-center py-2">
-                            All users are already members
-                          </div>
-                        )}
+                            <div className="text-xs text-gray-500 text-center py-2">
+                              All users are already members
+                            </div>
+                          )}
                       </div>
                     </div>
 
@@ -445,7 +474,7 @@ async function deleteUser(id) {
                             }
                             return String(m);
                           });
-                          
+
                           setEditingGroup({
                             _id: g._id,
                             name: g.name,
@@ -504,6 +533,41 @@ async function deleteUser(id) {
           </div>
         </section>
       </main>
+
+      {/* Reset Password Modal */}
+      {resetPasswordUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold mb-4">
+              🔐 Reset Password for {resetPasswordUser.displayName || resetPasswordUser.username}
+            </h3>
+            <input
+              type="password"
+              placeholder="Enter new password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full border p-3 rounded mb-4"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={resetUserPassword}
+                className="flex-1 bg-purple-600 text-white py-2 rounded hover:bg-purple-700"
+              >
+                Reset Password
+              </button>
+              <button
+                onClick={() => {
+                  setResetPasswordUser(null);
+                  setNewPassword("");
+                }}
+                className="flex-1 bg-gray-400 text-white py-2 rounded hover:bg-gray-500"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
