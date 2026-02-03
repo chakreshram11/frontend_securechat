@@ -6,7 +6,7 @@ import ChatWindow from "../components/ChatWindow";
 import GroupChatWindow from "../components/GroupChatWindow";
 import NotificationBell from "../components/NotificationBell";
 import AdminPanel from "../pages/AdminPanel";
-import { Menu, Settings } from "lucide-react";
+import { Menu, Settings, ArrowLeft } from "lucide-react";
 import { toast } from "react-toastify";
 
 export default function Chat({ token, onLogout, onSettingsClick }) {
@@ -385,12 +385,14 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
     if (diff < 86400) return `last seen ${Math.floor(diff / 3600)}h ago`;
     return `last seen ${Math.floor(diff / 86400)}d ago`;
   }
+  // Check if we have an active chat (for mobile view switching)
+  const hasActiveChat = selectedUser || selectedGroup || showAdminPanel;
 
   return (
     <div className="min-h-screen flex">
-      {/* Sidebar */}
+      {/* Sidebar - Full screen on mobile when no chat selected */}
       <aside
-        className={`fixed inset-y-0 left-0 bg-white w-72 border-r p-4 z-40 transform transition-transform lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        className={`bg-white w-full lg:w-72 border-r p-4 z-40 lg:relative flex flex-col ${hasActiveChat ? 'hidden lg:flex' : 'flex'
           }`}
       >
         <div className="flex items-center justify-between mb-3">
@@ -537,36 +539,38 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
         </div>
       </aside>
 
-      {/* Mobile top bar */}
-      <div className="lg:hidden fixed top-0 left-0 w-full bg-white border-b flex items-center justify-between p-3 z-50">
-        <button
-          className="p-2 rounded hover:bg-gray-100"
-          onClick={() => setSidebarOpen(true)}
-        >
-          <Menu size={24} />
-        </button>
-        <h2 className="font-bold">Secure Chat</h2>
-        <div className="flex items-center gap-2">
-          <NotificationBell socket={socketRef.current} />
+      {/* Mobile chat header with back button - only show when chat is active on mobile */}
+      {hasActiveChat && (
+        <div className="lg:hidden fixed top-0 left-0 w-full bg-white border-b flex items-center p-3 z-50">
           <button
-            className="p-2 rounded hover:bg-gray-100"
-            onClick={onSettingsClick}
+            className="p-2 rounded hover:bg-gray-100 mr-2"
+            onClick={() => {
+              setSelectedUser(null);
+              setSelectedGroup(null);
+              setShowAdminPanel(false);
+            }}
           >
-            <Settings size={24} />
+            <ArrowLeft size={24} />
           </button>
+          <h2 className="font-bold flex-1">
+            {showAdminPanel ? 'Admin Panel' : selectedGroup?.name || selectedUser?.displayName || selectedUser?.username || 'Chat'}
+          </h2>
+          <div className="flex items-center gap-2">
+            <NotificationBell socket={socketRef.current} />
+            <button
+              className="p-2 rounded hover:bg-gray-100"
+              onClick={onSettingsClick}
+            >
+              <Settings size={24} />
+            </button>
+          </div>
         </div>
-      </div>
-
-      {/* Overlay for mobile sidebar */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        ></div>
       )}
 
-      {/* Main content */}
-      <main className="flex-1 p-4 overflow-y-auto mt-12 lg:mt-0">
+
+
+      {/* Main content - hidden on mobile when no chat selected */}
+      <main className={`flex-1 p-4 overflow-y-auto mt-12 lg:mt-0 ${hasActiveChat ? 'block' : 'hidden lg:block'}`}>
         {/* Optional: show global system messages (like welcome) */}
         {systemMessages.length > 0 && (
           <div className="mb-4 bg-yellow-50 border border-yellow-300 rounded p-3 text-sm text-gray-700">
