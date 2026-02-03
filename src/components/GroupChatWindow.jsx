@@ -12,9 +12,10 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
   const [loading, setLoading] = useState(true);
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [memberKeys, setMemberKeys] = useState({}); // userId -> AES key
+  const [groupKey, setGroupKey] = useState(null); // Group AES key for encryption
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef();
-  const pendingMessagesRef = useRef({}); // memberId -> { tempId, plaintext, ciphertext }
+  const pendingMessagesRef = useRef({}); // memberId -> { tempId, plaintext, ciphertext } // memberId -> { tempId, plaintext, ciphertext }
 
   const appendNewMessage = (m) => {
     setHistory((prev) => {
@@ -47,6 +48,21 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
     (async () => {
       try {
         setLoading(true);
+
+        // Fetch and decrypt group key first
+        let decryptedGroupKey = null;
+        try {
+          const keyResponse = await api.get(`/api/groups/${String(group._id)}/key`);
+          if (keyResponse.data?.encryptedKey) {
+            const keyB64 = await cryptoLib.decryptGroupKey(keyResponse.data.encryptedKey);
+            decryptedGroupKey = await cryptoLib.cacheGroupKey(String(group._id), keyB64);
+            setGroupKey(decryptedGroupKey);
+            console.log("🔐 Group key decrypted and cached");
+          }
+        } catch (keyErr) {
+          console.warn("⚠️ No group key available (group may not have encryption set up):", keyErr.message);
+          // Continue without encryption - old groups won't have keys
+        }
 
         // Load group message history
         let { data } = await api.get(`/api/messages/group/${String(group._id)}`);
@@ -138,6 +154,23 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
               };
             }
 
+            // Strategy 0: Try group key first (new encrypted messages)
+            if (decryptedGroupKey) {
+              try {
+                plaintext = await cryptoLib.decryptWithAesKey(decryptedGroupKey, m.ciphertext);
+                console.log("✅ Group message decrypted using group key");
+                return {
+                  ...m,
+                  plaintext,
+                  isMe,
+                  senderName,
+                };
+              } catch (groupDecryptErr) {
+                console.log("ℹ️ Group key decryption failed, trying other strategies...");
+                // Continue to other strategies for backwards compatibility
+              }
+            }
+
             // If we don't have a local private key, we cannot decrypt encrypted messages
             if (!myPriv) {
               console.warn('⚠️ Cannot decrypt group message (no local private key) - showing placeholder');
@@ -149,7 +182,7 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
               };
             }
 
-            // Strategy 1: Try cached AES key for this sender
+            // Strategy 1: Try cached AES key for this sender (backwards compat)
             if (senderId) {
               const cachedKeyB64 = cryptoLib.loadAesKeyForUser(senderId);
               if (cachedKeyB64) {
@@ -603,17 +636,29 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
         }
       }
 
-      // Check if Web Crypto is available for encryption
-      const hasWebCrypto = window.crypto && window.crypto.subtle;
+      // Use group key for encryption if available
+      let ciphertext = text;
+      let isEncrypted = false;
+
+      const cachedGroupKey = cryptoLib.getCachedGroupKey(String(group._id));
+      if (cachedGroupKey) {
+        try {
+          ciphertext = await cryptoLib.encryptWithAesKey(cachedGroupKey, text);
+          isEncrypted = true;
+          console.log("🔐 Message encrypted with group key");
+        } catch (encErr) {
+          console.warn("⚠️ Failed to encrypt, sending unencrypted:", encErr.message);
+        }
+      }
 
       // Create a pending entry for optimistic UI update
       const broadcastTempId = `pending:group:${group._id}:${Date.now()}`;
 
-      // Store pending by the plaintext (since we're sending unencrypted to group)
+      // Store pending by the plaintext
       pendingMessagesRef.current[text] = {
         tempId: broadcastTempId,
         plaintext: text,
-        ciphertext: text,
+        ciphertext: ciphertext,
       };
 
       appendNewMessage({
@@ -621,35 +666,24 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
         senderId: myUserId,
         groupId: String(group._id),
         plaintext: text,
-        ciphertext: text,
+        ciphertext: ciphertext,
         type: 'text',
         createdAt: new Date(),
         isMe: true,
         senderName: 'You',
       });
 
-      // ============================================================
-      // TRUE GROUP BROADCAST: Send ONE message to the group room.
-      // No receiverId means the backend will emit to "group:${groupId}"
-      // and all members who have joined that room will receive it.
-      // ============================================================
-      // NOTE: This sends unencrypted messages to the group.
-      // For end-to-end encryption in groups, you would need a different
-      // architecture (e.g., group symmetric key, or the pairwise model).
-      // ============================================================
-
       socket.emit("sendMessage", {
-        // NO receiverId - this is the key change!
         groupId: String(group._id),
-        ciphertext: text, // Sending plaintext as "ciphertext" for unencrypted mode
+        ciphertext: ciphertext,
         type: "text",
         meta: {
-          unencrypted: true,
+          unencrypted: !isEncrypted,
           senderPublicKey: myPublicKey || null,
         },
       });
 
-      console.log(`📡 Sent group message to group:${group._id}`);
+      console.log(`📡 Sent group message to group:${group._id} (encrypted: ${isEncrypted})`);
 
       setText("");
     } catch (err) {

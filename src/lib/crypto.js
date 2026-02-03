@@ -172,6 +172,109 @@ export function clearAesKeyForUser(userId) {
   console.log(`🗑️ Cleared cached AES key for user ${userId}`);
 }
 
+// Encrypt private key with password for server storage (enables key recovery)
+export async function encryptPrivateKeyWithPassword(privateKeyB64, password) {
+  const encoder = new TextEncoder();
+  const salt = encoder.encode('ecdh-key-encryption-salt-v1'); // Same salt as backend
+
+  // Derive key from password using PBKDF2
+  const passwordKey = await window.crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits', 'deriveKey']
+  );
+
+  const aesKey = await window.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    passwordKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
+
+  // Generate random IV
+  const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+  // Encrypt the private key
+  const encryptedBuffer = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv },
+    aesKey,
+    encoder.encode(privateKeyB64)
+  );
+
+  // Get auth tag (last 16 bytes of encrypted result in Web Crypto)
+  const encrypted = new Uint8Array(encryptedBuffer);
+
+  // Combine IV + encrypted (which includes auth tag) - format compatible with backend
+  const combined = new Uint8Array(iv.length + encrypted.length);
+  combined.set(iv, 0);
+  combined.set(encrypted, iv.length);
+
+  return btoa(String.fromCharCode(...combined));
+}
+
+// Decrypt group key using user's public key (matches backend encryptGroupKeyForMember)
+export async function decryptGroupKey(encryptedKeyB64) {
+  const myPublicKey = getLocalPublicKey();
+  if (!myPublicKey) {
+    throw new Error("No public key available for group key decryption");
+  }
+
+  // Hash the public key to derive the decryption key (same as backend)
+  const pubKeyBuffer = Uint8Array.from(atob(myPublicKey), c => c.charCodeAt(0));
+  const hashBuffer = await window.crypto.subtle.digest('SHA-256', pubKeyBuffer);
+
+  // Import the derived key
+  const derivedKey = await window.crypto.subtle.importKey(
+    'raw',
+    hashBuffer,
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  );
+
+  // Parse the encrypted data: IV (16) + encrypted data (includes auth tag)
+  const combined = Uint8Array.from(atob(encryptedKeyB64), c => c.charCodeAt(0));
+  const iv = combined.slice(0, 16);
+  const encrypted = combined.slice(16); // authTag is included in encrypted data for Web Crypto
+
+  // Decrypt
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: iv },
+    derivedKey,
+    encrypted
+  );
+
+  return new TextDecoder().decode(decrypted);
+}
+
+// Cache for group AES keys (groupId -> CryptoKey)
+const groupKeyCache = new Map();
+
+export function getCachedGroupKey(groupId) {
+  return groupKeyCache.get(groupId);
+}
+
+export async function cacheGroupKey(groupId, keyB64) {
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0));
+  const key = await window.crypto.subtle.importKey(
+    'raw',
+    raw,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  groupKeyCache.set(groupId, key);
+  return key;
+}
+
 export async function importAesKeyFromRawBase64(b64) {
   const hasWebCrypto = checkSecureContext();
 

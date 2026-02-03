@@ -734,21 +734,18 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
       // For now, we'll proceed with encryption if we have keys
     }
 
-    // Always use encryption if we have the keys and Web Crypto is available
-    if (hasWebCrypto && aesKey) {
-      try {
-        const myPublicKey = cryptoLib.getLocalPublicKey();
-        if (!myPublicKey) {
-          console.error("❌ Cannot send: No public key found in localStorage");
-          toast.error("⚠️ Missing encryption key. Please log out and log back in.");
-          return;
-        }
+    // Use encryption if we have the keys and Web Crypto is available
+    // Otherwise, fallback to unencrypted (like group chat) for consistency
+    const pubKey = cryptoLib.getLocalPublicKey();
+    const canEncrypt = hasWebCrypto && aesKey && pubKey;
 
-        console.log("📤 Sending message:", {
+    if (canEncrypt) {
+      try {
+        console.log("📤 Sending encrypted message:", {
           textLength: text.length,
           hasAesKey: !!aesKey,
-          hasPublicKey: !!myPublicKey,
-          publicKeyLength: myPublicKey.length,
+          hasPublicKey: !!pubKey,
+          publicKeyLength: pubKey.length,
           receiverId: other._id
         });
 
@@ -760,19 +757,15 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
           const testDecrypt = await cryptoLib.decryptWithAesKey(aesKey, c);
           if (testDecrypt !== text) {
             console.error("🚨 Encryption verification failed - decrypted text doesn't match!");
-            toast.error("⚠️ Encryption verification failed. Message not sent.", {
-              autoClose: 3000
-            });
-            return;
+            // Fall through to unencrypted send
+            throw new Error("Encryption verification failed");
           } else {
             console.log("✅ Encryption verified - can decrypt own message");
           }
         } catch (verifyErr) {
-          console.error("🚨 Encryption verification failed:", verifyErr);
-          toast.error("⚠️ Encryption failed. Message not sent.", {
-            autoClose: 3000
-          });
-          return;
+          console.warn("⚠️ Encryption verification failed, falling back to unencrypted:", verifyErr.message);
+          // Fall through to unencrypted send below by re-throwing
+          throw verifyErr;
         }
 
         // Use a temporary id so we can update (not append) if we need to resend as plaintext
@@ -794,16 +787,9 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
           ciphertext: c,
           type: "text",
           meta: {
-            senderPublicKey: myPublicKey,
+            senderPublicKey: pubKey,
           },
         };
-
-        // Verify meta is properly formatted
-        if (!messagePayload.meta || !messagePayload.meta.senderPublicKey) {
-          console.error("🚨 CRITICAL: senderPublicKey is missing from message payload!");
-          toast.error("⚠️ Encryption error: Missing public key in message");
-          return;
-        }
 
         console.log("📤 Emitting sendMessage with payload:", {
           receiverId: messagePayload.receiverId,
@@ -811,7 +797,6 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
           hasMeta: !!messagePayload.meta,
           hasSenderPublicKey: !!messagePayload.meta.senderPublicKey,
           senderPublicKeyLength: messagePayload.meta.senderPublicKey?.length,
-          senderPublicKeyPreview: messagePayload.meta.senderPublicKey?.substring(0, 50),
           tempId
         });
 
@@ -823,45 +808,26 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
         socket.emit("sendMessage", messagePayload);
 
         console.log("✅ Message sent with senderPublicKey in meta");
-
         setText("");
+        return; // Successfully sent encrypted
       } catch (err) {
-        console.error("❌ Failed to send", err);
-        console.error("Error details:", err.message, err.stack);
-        toast.error("⚠️ Failed to send message. Check console for details.", {
-          autoClose: 3000
-        });
+        console.warn("⚠️ Encryption failed, falling back to unencrypted:", err.message);
+        // Fall through to unencrypted send below
       }
-    } else {
-      // Fallback: if we don't have encryption capabilities, send unencrypted message
-      console.warn("⚠️ Web Crypto not available - sending unencrypted message");
-      toast.info("ℹ️ Sending unencrypted message (Web Crypto not available in this context)");
-
-      // Send unencrypted message
-      const tempId = `pending:${Date.now()}`;
-      appendNewMessage({
-        tempId,
-        senderId: myUserId,
-        receiverId: other._id,
-        plaintext: text,
-        ciphertext: text,
-        type: "text",
-        meta: { unencrypted: true },
-        createdAt: new Date(),
-        isMe: true,
-        read: false,
-      });
-
-      const messagePayload = {
-        receiverId: other._id,
-        ciphertext: text,
-        type: "text",
-        meta: { unencrypted: true },
-      };
-
-      socket.emit("sendMessage", messagePayload);
-      setText("");
     }
+
+    // Encryption not available - show clear error instead of sending unencrypted
+    // With key synchronization, this should rarely happen. If it does, user should re-login.
+    console.error("❌ Cannot send: Encryption not available", {
+      hasWebCrypto,
+      hasAesKey: !!aesKey,
+      hasPubKey: !!pubKey
+    });
+
+    toast.error(
+      "🔐 Encryption not available. Please log out and log back in to restore your encryption keys.",
+      { autoClose: 6000 }
+    );
   }
 
   /* ---------- File upload ---------- */

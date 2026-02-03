@@ -76,7 +76,7 @@ export default function Login({ onLogin }) {
       // Login only
       let privateKey = await loadPrivateKey();
       const needPrivateKey = !privateKey;
-      
+
       // If we have a local public key, send it
       const publicKeyRawBase64 = cryptoLib.getLocalPublicKey();
 
@@ -91,14 +91,14 @@ export default function Login({ onLogin }) {
       // Always ensure we have valid keys in localStorage
       // Try server key first, but if it fails, generate new client-side keys
       let keysReady = false;
-      
+
       // Check if Web Crypto API is available
       const hasWebCrypto = window.crypto && window.crypto.subtle;
       console.log("Has Web Crypto:", hasWebCrypto);
       if (!hasWebCrypto) {
         console.warn("⚠️ Web Crypto not available - will proceed without encryption");
       }
-      
+
       // Only attempt ECDH key generation if Web Crypto is available
       if (hasWebCrypto) {
         if (data.ecdhPrivateKey) {
@@ -123,25 +123,54 @@ export default function Login({ onLogin }) {
             console.warn("⚠️ Server private key format incompatible:", err.message);
           }
         }
-        
+
         if (!keysReady) {
           try {
             console.log("🔄 Generating new client-side key pair...");
             const { privB64, pubB64 } = await cryptoLib.generateECDHKeyPair();
             console.log("✅ New key pair generated");
-            
+
             let testKey = await loadPrivateKey();
             if (!testKey) {
               await new Promise(resolve => setTimeout(resolve, 200));
               testKey = await loadPrivateKey();
             }
-            
+
             if (!testKey) {
               console.warn("⚠️ Key import verification failed, but keys are saved. Continuing...");
             } else {
               console.log("✅ Generated key verified and ready to use");
             }
-            
+
+            // Encrypt private key with password and upload to server for key recovery
+            try {
+              console.log("🔐 Encrypting private key for server storage...");
+              const encryptedPrivKey = await cryptoLib.encryptPrivateKeyWithPassword(privB64, password);
+
+              // We need to set token temporarily to make the API call
+              // Use the token from the login response
+              const tempToken = data.token;
+              const originalToken = localStorage.getItem('token');
+              localStorage.setItem('token', tempToken);
+
+              await api.post('/api/auth/uploadKeys', {
+                ecdhPublicKey: pubB64,
+                ecdhPrivateKeyEncrypted: encryptedPrivKey
+              });
+
+              // Restore original token state (will be set properly later)
+              if (originalToken) {
+                localStorage.setItem('token', originalToken);
+              } else {
+                localStorage.removeItem('token');
+              }
+
+              console.log("✅ Encrypted private key uploaded to server for recovery");
+            } catch (uploadErr) {
+              console.warn("⚠️ Failed to upload encrypted key (non-critical):", uploadErr.message);
+              // Keys still work locally, just can't recover on other devices
+            }
+
             keysReady = true;
           } catch (genErr) {
             console.error("❌ Failed to generate keys:", genErr.message);
@@ -179,7 +208,7 @@ export default function Login({ onLogin }) {
       } catch (uploadErr) {
         console.warn("⚠️ Failed to attempt public key upload:", uploadErr);
       }
-      
+
       onLogin(data.token);
     } catch (err) {
       console.error("Login error:", err);
@@ -189,7 +218,7 @@ export default function Login({ onLogin }) {
         message: err.message,
         code: err.code,
       });
-      
+
       let errorMessage = "Authentication failed";
 
       if (!err.response) {
@@ -203,7 +232,7 @@ export default function Login({ onLogin }) {
       } else {
         errorMessage = err.response?.data?.error || err.message || "Authentication failed";
       }
-      
+
       alert(errorMessage);
     } finally {
       setIsLoading(false);
@@ -238,17 +267,16 @@ export default function Login({ onLogin }) {
         />
 
         <button
-          className={`px-4 py-2 rounded w-full text-white ${
-            isLoading || connectionStatus === "disconnected" 
-              ? "bg-gray-400 cursor-not-allowed" 
+          className={`px-4 py-2 rounded w-full text-white ${isLoading || connectionStatus === "disconnected"
+              ? "bg-gray-400 cursor-not-allowed"
               : "bg-blue-600 hover:bg-blue-700"
-          }`}
+            }`}
           type="submit"
           disabled={isLoading || connectionStatus === "disconnected"}
         >
           {isLoading ? "Logging in..." : "Login"}
         </button>
-        
+
         <div className="mt-3 text-center text-sm">
           {connectionStatus === "checking" && (
             <p className="text-gray-500">🔌 Checking backend connection...</p>
@@ -260,7 +288,7 @@ export default function Login({ onLogin }) {
             <p className="text-red-600 font-semibold">❌ Backend not reachable ({import.meta.env.VITE_API_BASE || 'http://localhost:5000'})</p>
           )}
         </div>
-        
+
         <p className="text-xs text-gray-500 text-center mt-4">
           Contact your administrator to create an account
         </p>
