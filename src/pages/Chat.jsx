@@ -393,7 +393,12 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
         className={`fixed inset-y-0 left-0 bg-white w-72 border-r p-4 z-40 transform transition-transform lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
       >
-        <h3 className="font-bold mb-3">Users</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold">Users</h3>
+          <div className="hidden lg:block">
+            <NotificationBell socket={socketRef.current} />
+          </div>
+        </div>
         <div className="space-y-2 flex-1 overflow-y-auto mb-4">
           {users.map((u) => {
             const isOnline = onlineUsers.includes(u._id);
@@ -508,9 +513,7 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
 
         {/* Settings */}
         <div className="mt-4 flex items-center gap-2">
-          <div className="hidden lg:block">
-            <NotificationBell socket={socketRef.current} />
-          </div>
+
           <button
             className="bg-blue-600 text-white px-3 py-2 rounded flex-1 flex items-center justify-center gap-2"
             onClick={() => {
