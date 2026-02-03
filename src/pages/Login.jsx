@@ -101,7 +101,18 @@ export default function Login({ onLogin }) {
 
       // Only attempt ECDH key generation if Web Crypto is available
       if (hasWebCrypto) {
-        if (data.ecdhPrivateKey) {
+        // First, check if we have valid local keys that match the server
+        const localPriv = localStorage.getItem("ecdhPrivateKey");
+        const localPub = localStorage.getItem("ecdhPublicKey");
+        const serverPub = data.user.ecdhPublicKey;
+
+        // If local keys exist and local public matches server public, keys are synced
+        if (localPriv && localPub && serverPub && localPub === serverPub) {
+          console.log("✅ Local keys match server - using existing keys");
+          keysReady = true;
+        }
+        // If server has encrypted private key, try to recover
+        else if (data.ecdhPrivateKey) {
           // Try to verify the server key can be imported
           try {
             const raw = Uint8Array.from(atob(data.ecdhPrivateKey), (c) => c.charCodeAt(0)).buffer;
@@ -117,7 +128,7 @@ export default function Login({ onLogin }) {
             if (data.user.ecdhPublicKey) {
               localStorage.setItem("ecdhPublicKey", data.user.ecdhPublicKey);
             }
-            console.log("✅ Server private key saved and ready to use");
+            console.log("✅ Server private key restored and ready to use");
             keysReady = true;
           } catch (err) {
             console.warn("⚠️ Server private key format incompatible:", err.message);
@@ -268,8 +279,8 @@ export default function Login({ onLogin }) {
 
         <button
           className={`px-4 py-2 rounded w-full text-white ${isLoading || connectionStatus === "disconnected"
-              ? "bg-gray-400 cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700"
+            ? "bg-gray-400 cursor-not-allowed"
+            : "bg-blue-600 hover:bg-blue-700"
             }`}
           type="submit"
           disabled={isLoading || connectionStatus === "disconnected"}
