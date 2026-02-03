@@ -106,7 +106,7 @@ export default function Settings({ onClose, onThemeChange }) {
           </div>
 
           {/* File Sharing Toggle */}
-          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700">
+          {/* <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700">
             <div className="flex items-center space-x-3">
               <div className="p-2 rounded-full bg-green-100 dark:bg-green-900">
                 <SettingsIcon className="text-green-600 dark:text-green-300" size={18} />
@@ -124,7 +124,7 @@ export default function Settings({ onClose, onThemeChange }) {
             >
               {fileSharingEnabled ? 'Enabled' : 'Disabled'}
             </button>
-          </div>
+          </div> */}
 
           {/* Change Password Section */}
           <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-700">
