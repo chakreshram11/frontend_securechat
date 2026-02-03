@@ -23,6 +23,11 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
   const [systemMessages, setSystemMessages] = useState([]); // ✅ For optional welcome messages
   const socketRef = useRef();
 
+  // Resizable sidebar state
+  const [sidebarWidth, setSidebarWidth] = useState(288); // Default: 288px (w-72)
+  const isResizing = useRef(false);
+  const sidebarRef = useRef(null);
+
   // Unread message counts: separate maps for direct user chats and groups
   const [unreadUsers, setUnreadUsers] = useState({}); // userId -> count
   const [unreadGroups, setUnreadGroups] = useState({}); // groupId -> count
@@ -388,156 +393,199 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
   // Check if we have an active chat (for mobile view switching)
   const hasActiveChat = selectedUser || selectedGroup || showAdminPanel;
 
+  // Sidebar resize handlers
+  const startResizing = (e) => {
+    isResizing.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isResizing.current) return;
+
+      const newWidth = e.clientX;
+      // Constrain width between 200px and 500px
+      if (newWidth >= 200 && newWidth <= 500) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      isResizing.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
   return (
     <div className="min-h-screen flex">
       {/* Sidebar - Full screen on mobile when no chat selected */}
-      <aside
-        className={`bg-white w-full lg:w-72 border-r p-4 z-40 lg:relative flex flex-col ${hasActiveChat ? 'hidden lg:flex' : 'flex'
-          }`}
-      >
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-bold">Users</h3>
-          <div className="hidden lg:block">
-            <NotificationBell socket={socketRef.current} />
+      <div className="relative" style={{ width: window.innerWidth >= 1024 ? sidebarWidth : 'auto' }}>
+        <aside
+          ref={sidebarRef}
+          className={`bg-white w-full h-full border-r p-4 z-40 lg:relative flex flex-col ${hasActiveChat ? 'hidden lg:flex' : 'flex'
+            }`}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold">Users</h3>
+            <div className="hidden lg:block">
+              <NotificationBell socket={socketRef.current} />
+            </div>
           </div>
-        </div>
-        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
-          {users.map((u) => {
-            const isOnline = onlineUsers.includes(u._id);
-            const isMe = currentUser?._id === u._id;
+          <div className="space-y-2 flex-1 overflow-y-auto mb-4">
+            {users.map((u) => {
+              const isOnline = onlineUsers.includes(u._id);
+              const isMe = currentUser?._id === u._id;
 
-            return (
-              <div
-                key={u._id}
-                className={`p-2 border rounded transition-all ${isMe
-                  ? "bg-blue-50 border-blue-300" // 👤 highlight current user
-                  : selectedUser?._id === u._id
-                    ? "bg-gray-100"
-                    : "hover:bg-gray-50 cursor-pointer"
-                  }`}
-                onClick={() => {
-                  if (!isMe) {
-                    setSelectedUser(u);
-                    setSelectedGroup(null);
+              return (
+                <div
+                  key={u._id}
+                  className={`p-2 border rounded transition-all ${isMe
+                    ? "bg-blue-50 border-blue-300" // 👤 highlight current user
+                    : selectedUser?._id === u._id
+                      ? "bg-gray-100"
+                      : "hover:bg-gray-50 cursor-pointer"
+                    }`}
+                  onClick={() => {
+                    if (!isMe) {
+                      setSelectedUser(u);
+                      setSelectedGroup(null);
+                      setShowAdminPanel(false);
+                      setSidebarOpen(false);
+                      // Clear unread for this user and notify server
+                      clearUnreadUser(u._id);
+                    }
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold flex items-center gap-1">
+                      {u.displayName || u.username}
+                      {isMe && (
+                        <span className="text-xs text-blue-600 font-medium">(You)</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`h-3 w-3 rounded-full ${isOnline ? "bg-green-500" : "bg-gray-400"
+                          }`}
+                        title={isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
+                      ></span>
+                      {unreadUsers[u._id] > 0 && (
+                        <span className="bg-red-500 text-white text-xs rounded-full px-2">
+                          {unreadUsers[u._id] > 99 ? '99+' : unreadUsers[u._id]}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    className={`text-xs ${isOnline ? "text-green-600" : "text-gray-500"
+                      } mt-0.5`}
+                  >
+                    {isOnline ? "🟢 Online" : formatLastSeen(lastSeen[u._id])}
+                  </div>
+                </div>
+              );
+            })}
+
+          </div>
+
+          {/* Groups Section */}
+          <h3 className="font-bold mb-3 mt-4">Groups</h3>
+          <div className="space-y-2 flex-1 overflow-y-auto mb-4">
+            {groups.length === 0 ? (
+              <div className="text-sm text-gray-500 p-2">No groups yet</div>
+            ) : (
+              groups.map((g) => (
+                <div
+                  key={g._id}
+                  className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
+                    ? "bg-blue-100 border-blue-300"
+                    : "hover:bg-gray-50"
+                    }`}
+                  onClick={() => {
+                    setSelectedGroup(g);
+                    setSelectedUser(null);
                     setShowAdminPanel(false);
                     setSidebarOpen(false);
-                    // Clear unread for this user and notify server
-                    clearUnreadUser(u._id);
-                  }
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="font-semibold flex items-center gap-1">
-                    {u.displayName || u.username}
-                    {isMe && (
-                      <span className="text-xs text-blue-600 font-medium">(You)</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`h-3 w-3 rounded-full ${isOnline ? "bg-green-500" : "bg-gray-400"
-                        }`}
-                      title={isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
-                    ></span>
-                    {unreadUsers[u._id] > 0 && (
-                      <span className="bg-red-500 text-white text-xs rounded-full px-2">
-                        {unreadUsers[u._id] > 99 ? '99+' : unreadUsers[u._id]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div
-                  className={`text-xs ${isOnline ? "text-green-600" : "text-gray-500"
-                    } mt-0.5`}
+                    // Clear unread for this group and notify server
+                    clearUnreadGroup(g._id);
+                  }}
                 >
-                  {isOnline ? "🟢 Online" : formatLastSeen(lastSeen[u._id])}
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold">👥 {g.name}</div>
+                    {unreadGroups[g._id] > 0 && (
+                      <div className="bg-red-500 text-white text-xs rounded-full px-2">
+                        {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {g.members?.length || 0} members
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              ))
+            )}
+          </div>
 
-        </div>
-
-        {/* Groups Section */}
-        <h3 className="font-bold mb-3 mt-4">Groups</h3>
-        <div className="space-y-2 flex-1 overflow-y-auto mb-4">
-          {groups.length === 0 ? (
-            <div className="text-sm text-gray-500 p-2">No groups yet</div>
-          ) : (
-            groups.map((g) => (
-              <div
-                key={g._id}
-                className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
-                  ? "bg-blue-100 border-blue-300"
-                  : "hover:bg-gray-50"
-                  }`}
+          {/* ✅ Admin-only panel access */}
+          {currentUser?.role === "admin" && (
+            <div className="mt-4">
+              <button
+                className="bg-green-600 text-white px-3 py-2 rounded w-full"
                 onClick={() => {
-                  setSelectedGroup(g);
+                  setShowAdminPanel(true);
                   setSelectedUser(null);
-                  setShowAdminPanel(false);
+                  setSelectedGroup(null);
                   setSidebarOpen(false);
-                  // Clear unread for this group and notify server
-                  clearUnreadGroup(g._id);
                 }}
               >
-                <div className="flex items-center justify-between">
-                  <div className="font-semibold">👥 {g.name}</div>
-                  {unreadGroups[g._id] > 0 && (
-                    <div className="bg-red-500 text-white text-xs rounded-full px-2">
-                      {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
-                    </div>
-                  )}
-                </div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  {g.members?.length || 0} members
-                </div>
-              </div>
-            ))
+                Open Admin Panel
+              </button>
+            </div>
           )}
-        </div>
 
-        {/* ✅ Admin-only panel access */}
-        {currentUser?.role === "admin" && (
-          <div className="mt-4">
+          {/* Settings */}
+          <div className="mt-4 flex items-center gap-2">
+
             <button
-              className="bg-green-600 text-white px-3 py-2 rounded w-full"
+              className="bg-blue-600 text-white px-3 py-2 rounded flex-1 flex items-center justify-center gap-2"
               onClick={() => {
-                setShowAdminPanel(true);
-                setSelectedUser(null);
-                setSelectedGroup(null);
+                onSettingsClick();
                 setSidebarOpen(false);
               }}
             >
-              Open Admin Panel
+              <Settings size={18} />
+              Settings
             </button>
           </div>
-        )}
 
-        {/* Settings */}
-        <div className="mt-4 flex items-center gap-2">
+          {/* Logout */}
+          <div className="mt-4">
+            <button
+              className="bg-red-500 text-white px-3 py-2 rounded w-full"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          </div>
+        </aside>
 
-          <button
-            className="bg-blue-600 text-white px-3 py-2 rounded flex-1 flex items-center justify-center gap-2"
-            onClick={() => {
-              onSettingsClick();
-              setSidebarOpen(false);
-            }}
-          >
-            <Settings size={18} />
-            Settings
-          </button>
-        </div>
-
-        {/* Logout */}
-        <div className="mt-4">
-          <button
-            className="bg-red-500 text-white px-3 py-2 rounded w-full"
-            onClick={handleLogout}
-          >
-            Logout
-          </button>
-        </div>
-      </aside>
+        {/* Resize handle - only visible on desktop */}
+        <div
+          className="hidden lg:block absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors z-50"
+          onMouseDown={startResizing}
+          title="Drag to resize sidebar"
+        />
+      </div>
 
       {/* Mobile chat header with back button - only show when chat is active on mobile */}
       {hasActiveChat && (
