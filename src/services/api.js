@@ -37,6 +37,10 @@ const api = axios.create({
 // Request interceptor - add debugging
 api.interceptors.request.use(
   config => {
+    const token = sessionStorage.getItem("token") || localStorage.getItem("token");
+    if (token && !config.headers.Authorization) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     const fullUrl = `${config.baseURL || ''}${config.url}`;
     console.log(`📡 API Request: ${config.method?.toUpperCase()} ${fullUrl}`);
     console.log(`   Timeout: ${config.timeout}ms`);
