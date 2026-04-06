@@ -6,8 +6,9 @@ import ChatWindow from "../components/ChatWindow";
 import GroupChatWindow from "../components/GroupChatWindow";
 import NotificationBell from "../components/NotificationBell";
 import AdminPanel from "../pages/AdminPanel";
-import { Menu, Settings, ArrowLeft } from "lucide-react";
+import { Menu, Settings, ArrowLeft, RefreshCw } from "lucide-react";
 import { toast } from "react-toastify";
+import * as cryptoLib from "../lib/crypto";
 
 export default function Chat({ token, onLogout, onSettingsClick }) {
   const [users, setUsers] = useState([]);
@@ -388,6 +389,26 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
     onLogout();
   }
 
+  async function handleResetKeys() {
+    if (!window.confirm("WARNING: This will forcefully generate new encryption keys and PURGE your current local ones. Your previous encrypted messages may become permanently unreadable (if they aren't already). Only do this if you have persistent 'OperationError' decryption issues.\n\nProceed?")) {
+      return;
+    }
+    try {
+      toast.info("Generating new secure keys...");
+      const { pubB64 } = await cryptoLib.generateECDHKeyPair();
+      await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
+      
+      // Clear entire AES cache
+      localStorage.removeItem("aesKeys");
+      
+      toast.success("Security keys successfully regenerated & synced! Refreshing...", { autoClose: 2500 });
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to reset keys.");
+    }
+  }
+
   function formatLastSeen(ts) {
     if (!ts) return "offline";
     const diff = Math.floor((Date.now() - new Date(ts)) / 1000);
@@ -571,6 +592,18 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
             >
               <Settings size={18} />
               Settings
+            </button>
+          </div>
+
+          {/* Reset Keys */}
+          <div className="mt-4">
+            <button
+              className="bg-yellow-500 hover:bg-yellow-600 border border-yellow-600 text-white font-medium px-3 py-2 rounded w-full flex items-center justify-center gap-2"
+              onClick={handleResetKeys}
+              title="Fix decryption errors by generating new keys"
+            >
+              <RefreshCw size={18} />
+              Reset Encryption
             </button>
           </div>
 
