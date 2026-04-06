@@ -508,6 +508,9 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
             text = await cryptoLib.decryptWithAesKey(derived, m.ciphertext);
             decryptionSucceeded = true;
             console.log("✅ Decrypted with sender's public key from meta");
+            
+            // ✅ HEAL: Update this user's current encrypting aesKey to the fresh one, so direct replies work instantly
+            setAesKey(derived);
 
             // Check if decrypted text contains file info pattern
             const fileInfoCheck = m.meta?.fileInfo || (m.meta?.url ? m.meta : null);

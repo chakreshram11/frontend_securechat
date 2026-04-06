@@ -68,6 +68,12 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
 
   useEffect(() => {
     setToken(token);
+    
+    // ✅ HEAL: Force sync local public key with backend to repair any stale DB state
+    const localPub = localStorage.getItem("ecdhPublicKey");
+    if (localPub) {
+      api.post('/api/auth/uploadKey', { ecdhPublicKey: localPub }).catch(e => console.warn('Key sync skip:', e.message));
+    }
 
     let mounted = true;
     const currentUserRef = { current: null }; // will be updated below
