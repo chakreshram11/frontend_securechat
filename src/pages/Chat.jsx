@@ -710,9 +710,9 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
 
       {/* Mobile Chat Header */}
       {hasActiveChat && (
-        <div className="lg:hidden fixed top-0 left-0 w-full bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center p-3 z-50">
+        <div className="lg:hidden fixed top-0 left-0 w-full h-14 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center px-3 z-50 shadow-xs">
           <button
-            className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 mr-2 text-slate-600 dark:text-slate-300"
+            className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 mr-2 text-slate-600 dark:text-slate-300 active:scale-95 transition-all"
             onClick={() => {
               setSelectedUser(null);
               setSelectedGroup(null);
@@ -737,7 +737,7 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
       )}
 
       {/* Main Chat Content Area */}
-      <main className={`flex-1 overflow-hidden h-full flex flex-col ${hasActiveChat ? 'block' : 'hidden lg:flex'}`}>
+      <main className={`flex-1 overflow-hidden h-full flex flex-col ${hasActiveChat ? 'flex pt-14 lg:pt-0' : 'hidden lg:flex'}`}>
         {systemMessages.length > 0 && (
           <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/50 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-amber-500" />

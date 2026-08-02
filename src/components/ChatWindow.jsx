@@ -52,7 +52,7 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [hasRecipientKey, setHasRecipientKey] = useState(true);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef();
   const pendingLastMessageRef = useRef(null); // cache last plaintext sent (for resend fallback)
 
@@ -656,7 +656,9 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
 
   /* ---------- Auto-scroll ---------- */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = 0;
+    }
   }, [history]);
 
   /* ---------- Send text ---------- */
@@ -1045,7 +1047,7 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
       <div
         className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col-reverse space-y-reverse space-y-3 chat-pattern"
         style={{ minHeight: 0 }}
-        ref={messagesEndRef}
+        ref={messagesContainerRef}
       >
         {loading ? (
           <div className="flex items-center justify-center h-full text-slate-400 text-sm gap-2">
@@ -1161,7 +1163,9 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
               }
 
               setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+                if (messagesContainerRef.current) {
+                  messagesContainerRef.current.scrollTop = 0;
+                }
               }, 100);
             }}
             socket={socket}

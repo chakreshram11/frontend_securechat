@@ -14,7 +14,7 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [memberKeys, setMemberKeys] = useState({}); // userId -> AES key
   const [groupKey, setGroupKey] = useState(null); // Group AES key for encryption
-  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef();
   const pendingMessagesRef = useRef({}); // memberId -> { tempId, plaintext, ciphertext } // memberId -> { tempId, plaintext, ciphertext }
 
@@ -576,7 +576,9 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
 
   /* ---------- Auto-scroll ---------- */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = 0;
+    }
   }, [history]);
 
   /* ---------- Send message ---------- */
@@ -821,7 +823,7 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
       <div
         className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col-reverse space-y-reverse space-y-3 chat-pattern"
         style={{ minHeight: 0 }}
-        ref={messagesEndRef}
+        ref={messagesContainerRef}
       >
         {loading ? (
           <div className="flex items-center justify-center h-full text-slate-400 text-sm gap-2">
