@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import api, { setToken } from "../services/api";
 import * as cryptoLib from "../lib/crypto";
+import { MessageSquare, ShieldCheck, User, Lock, Wifi, WifiOff, Loader2 } from "lucide-react";
 
 // 🔑 Save private key locally
 async function savePrivateKey(privateKey) {
@@ -251,59 +252,110 @@ export default function Login({ onLogin }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <form
-        className="bg-white p-6 rounded shadow w-96"
-        onSubmit={handleLogin}
-      >
-        <h2 className="text-xl mb-4 font-semibold text-center">
-          Login
-        </h2>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 p-4 relative overflow-hidden">
+      {/* Decorative ambient background elements */}
+      <div className="absolute -top-32 -left-32 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl pointer-events-none"></div>
 
-        <input
-          className="w-full mb-2 p-2 border rounded"
-          placeholder="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          required
-        />
-
-        <input
-          type="password"
-          className="w-full mb-4 p-2 border rounded"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-
-        <button
-          className={`px-4 py-2 rounded w-full text-white ${isLoading || connectionStatus === "disconnected"
-            ? "bg-gray-400 cursor-not-allowed"
-            : "bg-blue-600 hover:bg-blue-700"
-            }`}
-          type="submit"
-          disabled={isLoading || connectionStatus === "disconnected"}
-        >
-          {isLoading ? "Logging in..." : "Login"}
-        </button>
-
-        <div className="mt-3 text-center text-sm">
-          {connectionStatus === "checking" && (
-            <p className="text-gray-500">🔌 Checking backend connection...</p>
-          )}
-          {connectionStatus === "connected" && (
-            <p className="text-green-600">✅ Backend connected</p>
-          )}
-          {connectionStatus === "disconnected" && (
-            <p className="text-red-600 font-semibold">❌ Backend not reachable ({import.meta.env.VITE_API_BASE || 'http://localhost:5000'})</p>
-          )}
+      <div className="w-full max-w-md bg-white/95 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/50 dark:border-slate-800/80 p-8 rounded-3xl shadow-2xl transition-all duration-300 relative z-10">
+        {/* Header Branding */}
+        <div className="flex flex-col items-center text-center mb-8">
+          <div className="w-16 h-16 bg-gradient-to-tr from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/25 mb-4 transform hover:scale-105 transition-transform duration-300">
+            <MessageSquare className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+            Welcome Back
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
+            <ShieldCheck className="w-4 h-4 text-emerald-500 inline" />
+            End-to-End Encrypted Workspace
+          </p>
         </div>
 
-        <p className="text-xs text-gray-500 text-center mt-4">
-          Contact your administrator to create an account
-        </p>
-      </form>
+        <form onSubmit={handleLogin} className="space-y-5">
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+              Username
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <User className="w-5 h-5" />
+              </div>
+              <input
+                className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-transparent transition-all text-sm font-medium"
+                placeholder="Enter your username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+              Password
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Lock className="w-5 h-5" />
+              </div>
+              <input
+                type="password"
+                className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-transparent transition-all text-sm font-medium"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <button
+            className={`w-full py-3.5 px-4 rounded-xl font-semibold text-white shadow-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+              isLoading || connectionStatus === "disconnected"
+                ? "bg-slate-400 dark:bg-slate-700 cursor-not-allowed shadow-none"
+                : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:scale-[0.99] shadow-indigo-500/25"
+            }`}
+            type="submit"
+            disabled={isLoading || connectionStatus === "disconnected"}
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Logging in...
+              </>
+            ) : (
+              "Sign In to Account"
+            )}
+          </button>
+        </form>
+
+        {/* Connection Status Badge */}
+        <div className="mt-6 pt-4 border-t border-slate-200/60 dark:border-slate-800/80 text-center">
+          {connectionStatus === "checking" && (
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 text-xs font-medium border border-amber-200/50 dark:border-amber-800/40">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Connecting to server...
+            </div>
+          )}
+          {connectionStatus === "connected" && (
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 text-xs font-medium border border-emerald-200/50 dark:border-emerald-800/40">
+              <Wifi className="w-3.5 h-3.5" />
+              Server Connected
+            </div>
+          )}
+          {connectionStatus === "disconnected" && (
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs font-medium border border-rose-200/50 dark:border-rose-800/40">
+              <WifiOff className="w-3.5 h-3.5" />
+              Server Offline ({import.meta.env.VITE_API_BASE || 'http://localhost:5000'})
+            </div>
+          )}
+
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-4">
+            Accounts are managed by your workspace administrator
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

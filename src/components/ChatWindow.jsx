@@ -5,6 +5,7 @@ import * as cryptoLib from "../lib/crypto";
 import { toast } from "react-toastify";
 import { generateECDHKeyPair } from "../lib/crypto";
 import FileUpload from "./FileUpload";
+import { Send, Paperclip, ShieldCheck, ShieldAlert, Key, Image as ImageIcon, FileText, Check, CheckCheck, Loader2, Lock } from "lucide-react";
 
 // 🔑 load private ECDH key from localStorage
 export async function loadLocalPrivateKey() {
@@ -958,70 +959,99 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
   }
 
   /* ---------- Render ---------- */
+  const getInitials = (name) => {
+    if (!name) return "?";
+    return name.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase();
+  };
+
   return (
-    <div className="flex flex-col h-full bg-white relative">
+    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden font-sans">
       {/* Header */}
-      <div className="border-b p-3 font-semibold bg-gray-100 flex justify-between items-center">
-        <span>{other.displayName || other.username}</span>
-        {/* Regenerate keys (admin only; disabled when Web Crypto unavailable) */}
-        {currentUser?.role === 'admin' && (
-          <button
-            className={`text-sm mr-3 ${window.crypto && window.crypto.subtle ? 'text-gray-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
-            onClick={async () => {
-              if (!(window.crypto && window.crypto.subtle)) {
-                toast.info(
-                  '🔒 Web Crypto not available here. To generate keys, use a secure context (HTTPS or localhost) or regenerate on another device and upload the public key.',
-                  { autoClose: 6000 }
-                );
-                return;
-              }
+      <div className="px-5 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md flex justify-between items-center z-10 shadow-xs">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+              {getInitials(other.displayName || other.username)}
+            </div>
+            <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900" />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-white text-base leading-tight">
+              {other.displayName || other.username}
+            </h3>
+            <div className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 inline" />
+              <span>End-to-End Encrypted</span>
+            </div>
+          </div>
+        </div>
 
-              try {
-                const { privB64, pubB64 } = await generateECDHKeyPair();
-                await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
-                toast.success('🔑 Keys regenerated and uploaded', { autoClose: 3000 });
-                console.log('✅ Keys regenerated and uploaded');
-                // Notify server of new capability
-                try {
-                  socket && socket.emit('capabilities', { hasPrivateKey: true, hasWebCrypto: !!(window.crypto && window.crypto.subtle) });
-                  console.log('⚙️ Capabilities updated (hasPrivateKey=true)');
-                } catch (e) {
-                  console.warn('⚠️ Failed to emit capabilities after regenerate:', e.message);
+        <div className="flex items-center gap-2">
+          {currentUser?.role === 'admin' && (
+            <button
+              className={`p-2 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all ${
+                window.crypto && window.crypto.subtle
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200/50 dark:border-indigo-800/50'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed dark:bg-slate-800'
+              }`}
+              onClick={async () => {
+                if (!(window.crypto && window.crypto.subtle)) {
+                  toast.info(
+                    '🔒 Web Crypto not available here. To generate keys, use a secure context (HTTPS or localhost).',
+                    { autoClose: 6000 }
+                  );
+                  return;
                 }
-              } catch (err) {
-                console.error('❌ Regenerate keys failed:', err);
-                toast.error('⚠️ Failed to regenerate keys. See console for details.', { autoClose: 4000 });
-              }
-            }}
-            title={window.crypto && window.crypto.subtle ? 'Regenerate encryption keys' : 'Web Crypto not available on this page'}
-          >
-            🔑 Regenerate
-          </button>
-        )}
 
-        <button
-          className="text-blue-600 hover:underline"
-          onClick={() => fileInputRef.current.click()}
-        >
-          📎
-        </button>
-        <input
-          type="file"
-          multiple
-          hidden
-          ref={fileInputRef}
-          onChange={(e) => handleFiles(e.target.files)}
-        />
+                try {
+                  const { privB64, pubB64 } = await generateECDHKeyPair();
+                  await api.post('/api/auth/uploadKey', { ecdhPublicKey: pubB64 });
+                  toast.success('🔑 Keys regenerated and uploaded', { autoClose: 3000 });
+                  try {
+                    socket && socket.emit('capabilities', { hasPrivateKey: true, hasWebCrypto: !!(window.crypto && window.crypto.subtle) });
+                  } catch (e) {
+                    console.warn('⚠️ Failed to emit capabilities after regenerate:', e.message);
+                  }
+                } catch (err) {
+                  console.error('❌ Regenerate keys failed:', err);
+                  toast.error('⚠️ Failed to regenerate keys.', { autoClose: 4000 });
+                }
+              }}
+              title={window.crypto && window.crypto.subtle ? 'Regenerate encryption keys' : 'Web Crypto not available'}
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Regenerate</span>
+            </button>
+          )}
+
+          <button
+            className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            onClick={() => fileInputRef.current.click()}
+            title="Attach file"
+          >
+            <Paperclip size={19} />
+          </button>
+          <input
+            type="file"
+            multiple
+            hidden
+            ref={fileInputRef}
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+        </div>
       </div>
 
       {/* Messages */}
       <div
-        className="flex-1 overflow-y-auto p-4 flex flex-col-reverse space-y-reverse space-y-3"
+        className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col-reverse space-y-reverse space-y-3 chat-pattern"
         style={{ minHeight: 0 }}
         ref={messagesEndRef}
       >
         {loading ? (
-          <div className="text-center text-gray-500">⏳ Loading...</div>
+          <div className="flex items-center justify-center h-full text-slate-400 text-sm gap-2">
+            <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+            Loading messages...
+          </div>
         ) : (
           history
             .slice()
@@ -1029,21 +1059,22 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
             .map((m, i) => (
               <div
                 key={i}
-                className={`flex ${m.isMe ? "justify-end" : "justify-start"}`}
+                className={`flex ${m.isMe ? "justify-end" : "justify-start"} message-bubble`}
               >
                 <div
-                  className={`max-w-xs sm:max-w-md p-2 rounded-lg shadow text-sm ${m.isMe
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-200 text-gray-800"
-                    }`}
+                  className={`max-w-xs sm:max-w-md md:max-w-lg p-3.5 rounded-2xl shadow-xs text-sm transition-all ${
+                    m.isMe
+                      ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-xs shadow-indigo-500/10"
+                      : "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800/80 rounded-tl-xs shadow-slate-200/20 dark:shadow-none"
+                  }`}
                 >
                   {m.type === "file" && m.meta?.url ? (
                     m.meta.isImage ? (
-                      <a href={m.meta.url} target="_blank" rel="noreferrer">
+                      <a href={m.meta.url} target="_blank" rel="noreferrer" className="block my-1 overflow-hidden rounded-xl">
                         <img
                           src={m.meta.url}
                           alt={m.meta.name}
-                          className="rounded max-h-60 object-contain cursor-pointer hover:opacity-90"
+                          className="rounded-xl max-h-64 w-full object-cover cursor-pointer hover:scale-102 transition-transform duration-200"
                         />
                       </a>
                     ) : (
@@ -1051,17 +1082,33 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
                         href={m.meta.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="underline"
+                        className={`flex items-center gap-2 p-2.5 rounded-xl text-xs font-medium my-1 ${
+                          m.isMe
+                            ? "bg-white/15 text-white hover:bg-white/25"
+                            : "bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 hover:bg-slate-200 dark:hover:bg-slate-700"
+                        } transition-colors`}
                       >
-                        {m.plaintext}
+                        <FileText className="w-4 h-4 flex-shrink-0" />
+                        <span className="truncate">{m.plaintext}</span>
                       </a>
                     )
                   ) : (
-                    <div>{m.plaintext}</div>
+                    <div className="whitespace-pre-wrap break-words leading-relaxed">{m.plaintext}</div>
                   )}
-                  <div className="text-xs opacity-70 mt-1 flex justify-between">
-                    <span>{new Date(m.createdAt).toLocaleTimeString()}</span>
-                    {m.isMe && <span>{m.read ? "✅" : "✔️"}</span>}
+
+                  <div className={`text-[10px] mt-1.5 flex items-center justify-end gap-1 ${
+                    m.isMe ? "text-indigo-200" : "text-slate-400 dark:text-slate-500"
+                  }`}>
+                    <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {m.isMe && (
+                      <span>
+                        {m.read ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-white" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-indigo-200" />
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1070,27 +1117,27 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
 
         {/* Upload progress */}
         {uploadingFiles.map((f) => (
-          <div key={f.id} className="text-sm text-gray-600">
-            {f.name} - {f.progress}%
+          <div key={f.id} className="text-xs text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 p-2 rounded-xl border border-indigo-200/50 dark:border-indigo-800/50 flex items-center justify-between">
+            <span>Uploading: {f.name}</span>
+            <span className="font-bold">{f.progress}%</span>
           </div>
         ))}
       </div>
 
-      {/* Input */}
+      {/* Warning banner */}
       {!hasRecipientKey && (
-        <div className="p-2 text-sm text-yellow-800 bg-yellow-50 border-t border-yellow-200 text-center">
-          ⚠️ {other.displayName || other.username} does not have an encryption key. Messages will be sent unencrypted.
+        <div className="p-2.5 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-t border-amber-200/60 dark:border-amber-800/40 text-center font-medium flex items-center justify-center gap-1.5">
+          <ShieldAlert className="w-4 h-4 text-amber-500 flex-shrink-0" />
+          <span>{other.displayName || other.username} hasn't uploaded keys. Messages are unencrypted.</span>
         </div>
       )}
 
-      <div className="p-3 border-t flex gap-2 bg-gray-50 sticky bottom-0">
-        <div className="flex items-center space-x-2">
+      {/* Sticky Message Input Footer */}
+      <div className="p-3 sm:p-4 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md sticky bottom-0">
+        <div className="flex items-center gap-2 max-w-5xl mx-auto">
           <FileUpload
             onFileUploaded={async (file) => {
-              // When a file is uploaded, create a file message and add it to chat
               const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(file.filename);
-
-              // Add the file message to chat history
               appendNewMessage({
                 senderId: myUserId,
                 receiverId: other._id,
@@ -1106,7 +1153,6 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
                 read: false,
               });
 
-              // Also send a text message about the file
               const fileMessage = `📎 Shared file: ${file.filename}`;
               if (text) {
                 setText(prev => `${prev}\n${fileMessage}`);
@@ -1114,7 +1160,6 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
                 setText(fileMessage);
               }
 
-              // Auto-scroll to show the new message
               setTimeout(() => {
                 messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
               }, 100);
@@ -1124,20 +1169,22 @@ export default function ChatWindow({ other, socket, myUserId, currentUser }) {
             otherUserId={other._id}
             aesKey={aesKey}
           />
+
+          <input
+            className="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 rounded-2xl px-4 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:focus:ring-indigo-400/50 focus:bg-white dark:focus:bg-slate-800 transition-all"
+            placeholder="Type your message..."
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+          />
+          <button
+            className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white p-2.5 rounded-2xl font-semibold shadow-md shadow-indigo-500/20 active:scale-95 transition-all duration-150 flex items-center justify-center"
+            onClick={send}
+            title="Send message"
+          >
+            <Send className="w-4 h-4" />
+          </button>
         </div>
-        <input
-          className="flex-1 border rounded px-3 py-2 text-sm"
-          placeholder="Type a message..."
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-        />
-        <button
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          onClick={send}
-        >
-          Send
-        </button>
       </div>
     </div>
   );

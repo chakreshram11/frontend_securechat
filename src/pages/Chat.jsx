@@ -6,7 +6,7 @@ import ChatWindow from "../components/ChatWindow";
 import GroupChatWindow from "../components/GroupChatWindow";
 import NotificationBell from "../components/NotificationBell";
 import AdminPanel from "../pages/AdminPanel";
-import { Menu, Settings, ArrowLeft, RefreshCw } from "lucide-react";
+import { Menu, Settings, ArrowLeft, RefreshCw, Search, User, Users, Shield, LogOut, KeyRound, ShieldCheck, Sparkles, MessageSquare } from "lucide-react";
 import { toast } from "react-toastify";
 import * as cryptoLib from "../lib/crypto";
 
@@ -18,6 +18,7 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [lastSeen, setLastSeen] = useState({});
@@ -453,121 +454,220 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
     };
   }, []);
 
+  // Filter users and groups based on search term
+  const filteredUsers = users.filter((u) => {
+    const query = searchTerm.toLowerCase();
+    return (
+      (u.displayName && u.displayName.toLowerCase().includes(query)) ||
+      (u.username && u.username.toLowerCase().includes(query))
+    );
+  });
+
+  const filteredGroups = groups.filter((g) => {
+    return g.name && g.name.toLowerCase().includes(searchTerm.toLowerCase());
+  });
+
+  const getInitials = (name) => {
+    if (!name) return "?";
+    return name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
+  };
+
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar - Full screen on mobile when no chat selected */}
-      <div className="relative" style={{ width: window.innerWidth >= 1024 ? sidebarWidth : 'auto' }}>
+    <div className="h-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
+      {/* Sidebar Container */}
+      <div className="relative h-full" style={{ width: window.innerWidth >= 1024 ? sidebarWidth : '100%' }}>
         <aside
           ref={sidebarRef}
-          className={`bg-white w-full h-full border-r p-4 z-40 lg:relative flex flex-col ${hasActiveChat ? 'hidden lg:flex' : 'flex'
-            }`}
+          className={`bg-white dark:bg-slate-900 w-full h-full border-r border-slate-200/80 dark:border-slate-800/80 p-4 z-40 lg:relative flex flex-col justify-between ${
+            hasActiveChat ? 'hidden lg:flex' : 'flex'
+          }`}
         >
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold">Users</h3>
-            <div className="hidden lg:block">
-              <NotificationBell socket={socketRef.current} />
+          {/* Top Brand & Profile Header */}
+          <div className="flex flex-col space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white font-bold shadow-md shadow-indigo-500/20">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-base text-slate-900 dark:text-white leading-tight flex items-center gap-1.5">
+                    SecureChat
+                    <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {currentUser?.displayName || currentUser?.username || "Connected"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <NotificationBell socket={socketRef.current} />
+                <button
+                  onClick={onSettingsClick}
+                  className="p-2 rounded-xl text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  title="Settings"
+                >
+                  <Settings size={19} />
+                </button>
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search messages or people..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 bg-slate-100 dark:bg-slate-800/80 border border-transparent focus:border-indigo-500/50 dark:focus:border-indigo-400/50 rounded-xl text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:bg-white dark:focus:bg-slate-800 transition-all"
+              />
             </div>
           </div>
-          <div className="space-y-2 flex-1 overflow-y-auto mb-4">
-            {users.map((u) => {
-              const isOnline = onlineUsers.includes(u._id);
-              const isMe = currentUser?._id === u._id;
 
-              return (
-                <div
-                  key={u._id}
-                  className={`p-2 border rounded transition-all ${isMe
-                    ? "bg-blue-50 border-blue-300" // 👤 highlight current user
-                    : selectedUser?._id === u._id
-                      ? "bg-gray-100"
-                      : "hover:bg-gray-50 cursor-pointer"
-                    }`}
-                  onClick={() => {
-                    if (!isMe) {
-                      setSelectedUser(u);
-                      setSelectedGroup(null);
-                      setShowAdminPanel(false);
-                      setSidebarOpen(false);
-                      // Clear unread for this user and notify server
-                      clearUnreadUser(u._id);
-                    }
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold flex items-center gap-1">
-                      {u.displayName || u.username}
-                      {isMe && (
-                        <span className="text-xs text-blue-600 font-medium">(You)</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-3 w-3 rounded-full ${isOnline ? "bg-green-500" : "bg-gray-400"
-                          }`}
-                        title={isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
-                      ></span>
+          {/* Contacts & Groups Lists */}
+          <div className="flex-1 overflow-y-auto my-4 space-y-6 pr-1">
+            {/* Direct Messages Section */}
+            <div>
+              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2.5 px-1">
+                <span className="flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5" /> Direct Messages ({filteredUsers.length})
+                </span>
+              </div>
+              <div className="space-y-1">
+                {filteredUsers.map((u) => {
+                  const isOnline = onlineUsers.includes(u._id);
+                  const isMe = currentUser?._id === u._id;
+                  const isSelected = selectedUser?._id === u._id;
+
+                  return (
+                    <div
+                      key={u._id}
+                      className={`group relative p-2.5 rounded-xl transition-all duration-150 flex items-center justify-between cursor-pointer ${
+                        isMe
+                          ? "bg-slate-50 dark:bg-slate-800/40 opacity-75 cursor-default"
+                          : isSelected
+                          ? "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-950 dark:text-indigo-100 font-medium shadow-sm border border-indigo-200/50 dark:border-indigo-800/50"
+                          : "hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300"
+                      }`}
+                      onClick={() => {
+                        if (!isMe) {
+                          setSelectedUser(u);
+                          setSelectedGroup(null);
+                          setShowAdminPanel(false);
+                          setSidebarOpen(false);
+                          clearUnreadUser(u._id);
+                        }
+                      }}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {/* User Avatar with Online Dot */}
+                        <div className="relative flex-shrink-0">
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold ${
+                            isSelected
+                              ? "bg-indigo-600 text-white"
+                              : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                          }`}>
+                            {getInitials(u.displayName || u.username)}
+                          </div>
+                          <span
+                            className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                              isOnline ? "bg-emerald-500" : "bg-slate-400"
+                            }`}
+                          />
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1">
+                            <span className="truncate text-sm font-semibold">
+                              {u.displayName || u.username}
+                            </span>
+                            {isMe && (
+                              <span className="text-[10px] bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400 font-medium">You</span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate">
+                            {isOnline ? "Online" : formatLastSeen(lastSeen[u._id])}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Unread badge */}
                       {unreadUsers[u._id] > 0 && (
-                        <span className="bg-red-500 text-white text-xs rounded-full px-2">
+                        <span className="bg-indigo-600 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] px-1.5 flex items-center justify-center">
                           {unreadUsers[u._id] > 99 ? '99+' : unreadUsers[u._id]}
                         </span>
                       )}
                     </div>
-                  </div>
-                  <div
-                    className={`text-xs ${isOnline ? "text-green-600" : "text-gray-500"
-                      } mt-0.5`}
-                  >
-                    {isOnline ? "🟢 Online" : formatLastSeen(lastSeen[u._id])}
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            </div>
 
-          </div>
+            {/* Groups Section */}
+            <div>
+              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2.5 px-1">
+                <span className="flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" /> Groups ({filteredGroups.length})
+                </span>
+              </div>
+              <div className="space-y-1">
+                {filteredGroups.length === 0 ? (
+                  <p className="text-xs text-slate-400 dark:text-slate-600 p-2 italic">No groups found</p>
+                ) : (
+                  filteredGroups.map((g) => {
+                    const isSelected = selectedGroup?._id === g._id;
+                    return (
+                      <div
+                        key={g._id}
+                        className={`p-2.5 rounded-xl transition-all duration-150 flex items-center justify-between cursor-pointer ${
+                          isSelected
+                            ? "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-950 dark:text-indigo-100 font-medium shadow-sm border border-indigo-200/50 dark:border-indigo-800/50"
+                            : "hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300"
+                        }`}
+                        onClick={() => {
+                          setSelectedGroup(g);
+                          setSelectedUser(null);
+                          setShowAdminPanel(false);
+                          setSidebarOpen(false);
+                          clearUnreadGroup(g._id);
+                        }}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-semibold ${
+                            isSelected
+                              ? "bg-purple-600 text-white"
+                              : "bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300"
+                          }`}>
+                            👥
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span className="truncate text-sm font-semibold block">
+                              {g.name}
+                            </span>
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                              {g.members?.length || 0} members
+                            </p>
+                          </div>
+                        </div>
 
-          {/* Groups Section */}
-          <h3 className="font-bold mb-3 mt-4">Groups</h3>
-          <div className="space-y-2 flex-1 overflow-y-auto mb-4">
-            {groups.length === 0 ? (
-              <div className="text-sm text-gray-500 p-2">No groups yet</div>
-            ) : (
-              groups.map((g) => (
-                <div
-                  key={g._id}
-                  className={`p-2 border rounded cursor-pointer transition-all ${selectedGroup?._id === g._id
-                    ? "bg-blue-100 border-blue-300"
-                    : "hover:bg-gray-50"
-                    }`}
-                  onClick={() => {
-                    setSelectedGroup(g);
-                    setSelectedUser(null);
-                    setShowAdminPanel(false);
-                    setSidebarOpen(false);
-                    // Clear unread for this group and notify server
-                    clearUnreadGroup(g._id);
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold">👥 {g.name}</div>
-                    {unreadGroups[g._id] > 0 && (
-                      <div className="bg-red-500 text-white text-xs rounded-full px-2">
-                        {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
+                        {unreadGroups[g._id] > 0 && (
+                          <span className="bg-purple-600 text-white text-[10px] font-bold rounded-full h-5 min-w-[20px] px-1.5 flex items-center justify-center">
+                            {unreadGroups[g._id] > 99 ? '99+' : unreadGroups[g._id]}
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">
-                    {g.members?.length || 0} members
-                  </div>
-                </div>
-              ))
-            )}
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* ✅ Admin-only panel access */}
-          {currentUser?.role === "admin" && (
-            <div className="mt-4">
+          {/* Bottom Action Footer */}
+          <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800/80 space-y-2">
+            {currentUser?.role === "admin" && (
               <button
-                className="bg-green-600 text-white px-3 py-2 rounded w-full"
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
                 onClick={() => {
                   setShowAdminPanel(true);
                   setSelectedUser(null);
@@ -575,94 +675,74 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
                   setSidebarOpen(false);
                 }}
               >
+                <Shield size={15} />
                 Open Admin Panel
               </button>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                className="flex-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-300/40 dark:border-amber-700/40 font-medium py-2 px-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all"
+                onClick={handleResetKeys}
+                title="Reset encryption keys"
+              >
+                <RefreshCw size={14} />
+                Reset Keys
+              </button>
+              <button
+                className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-300/40 dark:border-rose-800/40 font-medium py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all"
+                onClick={handleLogout}
+              >
+                <LogOut size={14} />
+                Logout
+              </button>
             </div>
-          )}
-
-          {/* Settings */}
-          <div className="mt-4 flex items-center gap-2">
-
-            <button
-              className="bg-blue-600 text-white px-3 py-2 rounded flex-1 flex items-center justify-center gap-2"
-              onClick={() => {
-                onSettingsClick();
-                setSidebarOpen(false);
-              }}
-            >
-              <Settings size={18} />
-              Settings
-            </button>
-          </div>
-
-          {/* Reset Keys */}
-          <div className="mt-4">
-            <button
-              className="bg-yellow-500 hover:bg-yellow-600 border border-yellow-600 text-white font-medium px-3 py-2 rounded w-full flex items-center justify-center gap-2"
-              onClick={handleResetKeys}
-              title="Fix decryption errors by generating new keys"
-            >
-              <RefreshCw size={18} />
-              Reset Encryption
-            </button>
-          </div>
-
-          {/* Logout */}
-          <div className="mt-4">
-            <button
-              className="bg-red-500 text-white px-3 py-2 rounded w-full"
-              onClick={handleLogout}
-            >
-              Logout
-            </button>
           </div>
         </aside>
 
-        {/* Resize handle - only visible on desktop */}
+        {/* Sidebar Drag Resizer Handle */}
         <div
-          className="hidden lg:block absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors z-50"
+          className="hidden lg:block absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-indigo-500 transition-colors z-50"
           onMouseDown={startResizing}
           title="Drag to resize sidebar"
         />
       </div>
 
-      {/* Mobile chat header with back button - only show when chat is active on mobile */}
+      {/* Mobile Chat Header */}
       {hasActiveChat && (
-        <div className="lg:hidden fixed top-0 left-0 w-full bg-white border-b flex items-center p-3 z-50">
+        <div className="lg:hidden fixed top-0 left-0 w-full bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center p-3 z-50">
           <button
-            className="p-2 rounded hover:bg-gray-100 mr-2"
+            className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 mr-2 text-slate-600 dark:text-slate-300"
             onClick={() => {
               setSelectedUser(null);
               setSelectedGroup(null);
               setShowAdminPanel(false);
             }}
           >
-            <ArrowLeft size={24} />
+            <ArrowLeft size={20} />
           </button>
-          <h2 className="font-bold flex-1">
+          <h2 className="font-bold text-sm text-slate-900 dark:text-white flex-1 truncate">
             {showAdminPanel ? 'Admin Panel' : selectedGroup?.name || selectedUser?.displayName || selectedUser?.username || 'Chat'}
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <NotificationBell socket={socketRef.current} />
             <button
-              className="p-2 rounded hover:bg-gray-100"
+              className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
               onClick={onSettingsClick}
             >
-              <Settings size={24} />
+              <Settings size={20} />
             </button>
           </div>
         </div>
       )}
 
-
-
-      {/* Main content - hidden on mobile when no chat selected */}
-      <main className={`flex-1 p-4 overflow-y-auto mt-12 lg:mt-0 ${hasActiveChat ? 'block' : 'hidden lg:block'}`}>
-        {/* Optional: show global system messages (like welcome) */}
+      {/* Main Chat Content Area */}
+      <main className={`flex-1 overflow-hidden h-full flex flex-col ${hasActiveChat ? 'block' : 'hidden lg:flex'}`}>
         {systemMessages.length > 0 && (
-          <div className="mb-4 bg-yellow-50 border border-yellow-300 rounded p-3 text-sm text-gray-700">
+          <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800/50 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-amber-500" />
             {systemMessages.map((m, i) => (
-              <div key={i}>💬 {m.ciphertext}</div>
+              <span key={i}>{m.ciphertext}</span>
             ))}
           </div>
         )}
@@ -683,7 +763,21 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
             currentUser={currentUser}
           />
         ) : (
-          <div className="text-gray-500">Select a user or group to chat</div>
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-slate-950">
+            <div className="w-20 h-20 bg-indigo-100 dark:bg-slate-900 rounded-3xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-4 shadow-inner">
+              <MessageSquare className="w-10 h-10" />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
+              End-to-End Encrypted Chat
+            </h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm">
+              Select a contact or group from the sidebar to begin messaging with full privacy.
+            </p>
+            <div className="mt-6 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-600">
+              <ShieldCheck className="w-4 h-4 text-emerald-500" />
+              AES-256 & ECDH Key Exchange Protected
+            </div>
+          </div>
         )}
       </main>
     </div>

@@ -5,6 +5,7 @@ import * as cryptoLib from "../lib/crypto";
 import { toast } from "react-toastify";
 import { loadLocalPrivateKey } from "./ChatWindow";
 import FileUpload from "./FileUpload";
+import { Send, Paperclip, Users, FileText, Loader2 } from "lucide-react";
 
 export default function GroupChatWindow({ group, socket, myUserId }) {
   const [history, setHistory] = useState([]);
@@ -781,33 +782,52 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
 
   /* ---------- Render ---------- */
   return (
-    <div className="flex flex-col h-full bg-white relative">
+    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden font-sans">
       {/* Header */}
-      <div className="border-b p-3 font-semibold bg-gray-100 flex justify-between items-center">
-        <span>👥 {group.name}</span>
-        <button
-          className="text-blue-600 hover:underline"
-          onClick={() => fileInputRef.current.click()}
-        >
-          📎
-        </button>
-        <input
-          type="file"
-          multiple
-          hidden
-          ref={fileInputRef}
-          onChange={(e) => handleFiles(e.target.files)}
-        />
+      <div className="px-5 py-3.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md flex justify-between items-center z-10 shadow-xs">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+            👥
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-white text-base leading-tight">
+              {group.name}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {group.members?.length || 0} group members
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            onClick={() => fileInputRef.current.click()}
+            title="Attach file"
+          >
+            <Paperclip size={19} />
+          </button>
+          <input
+            type="file"
+            multiple
+            hidden
+            ref={fileInputRef}
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+        </div>
       </div>
 
       {/* Messages */}
       <div
-        className="flex-1 overflow-y-auto p-4 flex flex-col-reverse space-y-reverse space-y-3"
+        className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col-reverse space-y-reverse space-y-3 chat-pattern"
         style={{ minHeight: 0 }}
         ref={messagesEndRef}
       >
         {loading ? (
-          <div className="text-center text-gray-500">⏳ Loading...</div>
+          <div className="flex items-center justify-center h-full text-slate-400 text-sm gap-2">
+            <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+            Loading group history...
+          </div>
         ) : (
           history
             .slice()
@@ -815,26 +835,28 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
             .map((m, i) => (
               <div
                 key={i}
-                className={`flex ${m.isMe ? "justify-end" : "justify-start"}`}
+                className={`flex ${m.isMe ? "justify-end" : "justify-start"} message-bubble`}
               >
                 <div
-                  className={`max-w-xs sm:max-w-md p-2 rounded-lg shadow text-sm ${m.isMe
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-200 text-gray-800"
-                    }`}
+                  className={`max-w-xs sm:max-w-md md:max-w-lg p-3.5 rounded-2xl shadow-xs text-sm transition-all ${
+                    m.isMe
+                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-tr-xs shadow-purple-500/10"
+                      : "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-800/80 rounded-tl-xs shadow-slate-200/20 dark:shadow-none"
+                  }`}
                 >
                   {!m.isMe && (
-                    <div className="text-xs font-semibold mb-1 opacity-80">
+                    <div className="text-xs font-semibold mb-1 text-purple-600 dark:text-purple-400">
                       {m.senderName}
                     </div>
                   )}
+
                   {m.type === "file" && m.meta?.url ? (
                     m.meta.isImage ? (
-                      <a href={m.meta.url} target="_blank" rel="noreferrer">
+                      <a href={m.meta.url} target="_blank" rel="noreferrer" className="block my-1 overflow-hidden rounded-xl">
                         <img
                           src={m.meta.url}
                           alt={m.meta.name}
-                          className="rounded max-h-60 object-contain cursor-pointer hover:opacity-90"
+                          className="rounded-xl max-h-64 w-full object-cover cursor-pointer hover:scale-102 transition-transform duration-200"
                         />
                       </a>
                     ) : (
@@ -842,16 +864,24 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
                         href={m.meta.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="underline"
+                        className={`flex items-center gap-2 p-2.5 rounded-xl text-xs font-medium my-1 ${
+                          m.isMe
+                            ? "bg-white/15 text-white hover:bg-white/25"
+                            : "bg-slate-100 dark:bg-slate-800 text-purple-600 dark:text-purple-400 hover:bg-slate-200 dark:hover:bg-slate-700"
+                        } transition-colors`}
                       >
-                        {m.plaintext}
+                        <FileText className="w-4 h-4 flex-shrink-0" />
+                        <span className="truncate">{m.plaintext}</span>
                       </a>
                     )
                   ) : (
-                    <div>{m.plaintext}</div>
+                    <div className="whitespace-pre-wrap break-words leading-relaxed">{m.plaintext}</div>
                   )}
-                  <div className="text-xs opacity-70 mt-1">
-                    {new Date(m.createdAt).toLocaleTimeString()}
+
+                  <div className={`text-[10px] mt-1.5 flex items-center justify-end gap-1 ${
+                    m.isMe ? "text-purple-200" : "text-slate-400 dark:text-slate-500"
+                  }`}>
+                    <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                 </div>
               </div>
@@ -860,40 +890,41 @@ export default function GroupChatWindow({ group, socket, myUserId }) {
 
         {/* Upload progress */}
         {uploadingFiles.map((f) => (
-          <div key={f.id} className="text-sm text-gray-600">
-            {f.name} - {f.progress}%
+          <div key={f.id} className="text-xs text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 p-2 rounded-xl border border-purple-200/50 dark:border-purple-800/50 flex items-center justify-between">
+            <span>Uploading: {f.name}</span>
+            <span className="font-bold">{f.progress}%</span>
           </div>
         ))}
       </div>
 
-      {/* Input */}
-      <div className="p-3 border-t flex gap-2 bg-gray-50 sticky bottom-0">
-        <div className="flex items-center space-x-2">
+      {/* Sticky Message Input Footer */}
+      <div className="p-3 sm:p-4 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md sticky bottom-0">
+        <div className="flex items-center gap-2 max-w-5xl mx-auto">
           <FileUpload
             onFileUploaded={(file) => {
-              // When a file is uploaded via FileUpload component, 
-              // the component now handles sending to the group
               console.log(`📁 File uploaded to group: ${file.filename}`);
             }}
             socket={socket}
             myUserId={myUserId}
-            groupId={group._id}  // Use groupId for group file uploads
-            aesKey={null} // No AES key for group file uploads
+            groupId={group._id}
+            aesKey={null}
           />
+
+          <input
+            className="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 rounded-2xl px-4 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500/50 dark:focus:ring-purple-400/50 focus:bg-white dark:focus:bg-slate-800 transition-all"
+            placeholder="Send a message to group..."
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+          />
+          <button
+            className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white p-2.5 rounded-2xl font-semibold shadow-md shadow-purple-500/20 active:scale-95 transition-all duration-150 flex items-center justify-center"
+            onClick={send}
+            title="Send group message"
+          >
+            <Send className="w-4 h-4" />
+          </button>
         </div>
-        <input
-          className="flex-1 border rounded px-3 py-2 text-sm"
-          placeholder="Type a message..."
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-        />
-        <button
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          onClick={send}
-        >
-          Send
-        </button>
       </div>
     </div>
   );
