@@ -475,12 +475,13 @@ export default function Chat({ token, onLogout, onSettingsClick }) {
   return (
     <div className="h-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       {/* Sidebar Container */}
-      <div className="relative h-full" style={{ width: window.innerWidth >= 1024 ? sidebarWidth : '100%' }}>
+      <div
+        className={`relative h-full ${hasActiveChat ? 'hidden lg:block' : 'w-full lg:w-auto'}`}
+        style={{ width: window.innerWidth >= 1024 ? sidebarWidth : undefined }}
+      >
         <aside
           ref={sidebarRef}
-          className={`bg-white dark:bg-slate-900 w-full h-full border-r border-slate-200/80 dark:border-slate-800/80 p-4 z-40 lg:relative flex flex-col justify-between ${
-            hasActiveChat ? 'hidden lg:flex' : 'flex'
-          }`}
+          className="bg-white dark:bg-slate-900 w-full h-full border-r border-slate-200/80 dark:border-slate-800/80 p-4 z-40 lg:relative flex flex-col justify-between"
         >
           {/* Top Brand & Profile Header */}
           <div className="flex flex-col space-y-4">
